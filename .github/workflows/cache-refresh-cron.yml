@@ -6,13 +6,17 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   refresh:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Validate required secrets
         env:
           STALLED_RUNNER_BASE_URL: ${{ secrets.STALLED_RUNNER_BASE_URL }}
@@ -59,3 +63,14 @@ jobs:
             echo "Cache refresh failed"
             exit 1
           fi
+
+      - name: Keep repo active with miniscule commit
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git commit --allow-empty -m "chore: cache refresh keepalive [skip ci]"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
