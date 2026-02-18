@@ -1,0 +1,61 @@
+name: Cache Refresh
+
+on:
+  schedule:
+    - cron: '4-59/10 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Validate required secrets
+        env:
+          STALLED_RUNNER_BASE_URL: ${{ secrets.STALLED_RUNNER_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${STALLED_RUNNER_BASE_URL:-}" ]; then
+            echo "Missing required GitHub secret: STALLED_RUNNER_BASE_URL"
+            exit 1
+          fi
+          if [ -z "${CRON_SECRET:-}" ]; then
+            echo "Missing required GitHub secret: CRON_SECRET"
+            exit 1
+          fi
+
+      - name: Refresh read models from Notion
+        env:
+          STALLED_RUNNER_BASE_URL: ${{ secrets.STALLED_RUNNER_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+
+          refresh_url="${STALLED_RUNNER_BASE_URL%/}/api/internal/cache/refresh"
+          response_file="$(mktemp)"
+
+          status_code="$(
+            curl \
+              --silent \
+              --show-error \
+              --connect-timeout 10 \
+              --max-time 90 \
+              --output "${response_file}" \
+              --write-out '%{http_code}' \
+              --request POST \
+              --header "Authorization: Bearer ${CRON_SECRET}" \
+              --header "Content-Type: application/json" \
+              "${refresh_url}"
+          )"
+
+          echo "Refresh status: ${status_code}"
+          cat "${response_file}"
+
+          if [ "${status_code}" -lt 200 ] || [ "${status_code}" -ge 300 ]; then
+            echo "Cache refresh failed"
+            exit 1
+          fi
