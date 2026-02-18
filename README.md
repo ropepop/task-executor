@@ -1,6 +1,6 @@
 # Notiolink Cron Jobs
 
-Public repository for Notiolink's scheduled cron jobs, designed to utilize GitHub Actions free minutes.
+Public repository for Notiolink's scheduled cron jobs.
 
 ## Overview
 
