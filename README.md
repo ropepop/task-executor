@@ -19,14 +19,16 @@ This repository contains GitHub Actions workflows that trigger scheduled mainten
 **What it does**:
 
 - Identifies operations that have been stalled for >45 seconds
-- Uses an adaptive in-run loop so one workflow run can process multiple drain iterations
+- Uses a strict single-item loop so each successful iteration advances one item at a time
 - Uses adaptive request timeout windows (bounded by remaining run budget)
-- Keeps continuation via guarded self-dispatch when productive work remains and run budget is exhausted
+- Enforces single-item contract checks (`attemptedCount <= 1`, `succeededCount <= 1`) and fails fast on violations
+- Keeps continuation via guarded self-dispatch only when backlog remains and the last transition was a success
 - Returns before/after snapshots of the queue state
-- Sends trace/runtime headers (`X-Cron-Source`, `X-Cron-Run-Id`, `X-Cron-Event`, `X-Cron-Chain-Depth`, `X-Cron-Runtime-Tier`, `X-Cron-Target-Runtime-Sec`) with each drain request
-- Uses `succeededCount`, backlog deltas, `progressHint`, and `rateLimitedCount`/`rateLimitOnly` signals for decisions
-- Stops self-dispatch on no-progress or rate-limited-only iterations to avoid chain storms
-- Supports optional same-run retry when `retryAfterSec` is present and safe within budget
+- Sends trace/runtime headers (`X-Cron-Source`, `X-Cron-Run-Id`, `X-Cron-Event`, `X-Cron-Chain-Depth`, `X-Cron-Runtime-Tier`, `X-Cron-Target-Runtime-Sec`) plus strict-mode hints (`X-Cron-Processing-Mode`, `X-Cron-Max-Items`, `X-Cron-Backoff-Strategy`) with each drain request
+- Uses `succeededCount`, `rateLimitedCount`/`rateLimitOnly`, and backlog snapshots for decisions
+- Uses exponential+jitter backoff on rate-limited-only iterations (defaults: base `2s`, cap `300s`, jitter `25%`, max retries `7`)
+- When provided, uses `sleep = max(retryAfterSec, computedBackoff)`
+- Stops gracefully on `rate_limit_retry_cap_reached` or `rate_limit_budget_exhausted` (no chain storming)
 - Never dispatches more than one follow-up worker per run
 - Uses workflow concurrency locking so overlapping drain workers on the same ref do not run in parallel
 
@@ -101,7 +103,10 @@ For **Operation Queue Drain**, optional manual `workflow_dispatch` inputs are av
 - `max_request_timeout_sec` (default: `1800`)
 - `max_iterations` (default: `60`)
 - `min_iterations_before_chain` (default: `2`)
-- `disable_padding` (deprecated, accepted for compatibility, ignored)
+- `backoff_base_sec` (default: `2`)
+- `backoff_cap_sec` (default: `300`)
+- `backoff_max_retries` (default: `7`)
+- `backoff_jitter_pct` (default: `25`)
 
 These inputs are primarily for continuity testing/debugging; normal manual runs can use defaults.
 
@@ -197,3 +202,6 @@ This repository is part of the App project. All rights reserved.
 ## Support
 
 For issues or questions, please refer to the private App repository documentation or contact the development team.
+
+Private endpoint follow-up spec for strict single-item execution:
+- [`docs/LINKS-STRICT-DRAIN-FOLLOWUP.md`](docs/LINKS-STRICT-DRAIN-FOLLOWUP.md)

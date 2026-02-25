@@ -13,10 +13,6 @@ on:
         description: Origin marker for run continuity telemetry
         required: false
         default: manual
-      disable_padding:
-        description: Deprecated compatibility input (ignored by adaptive runner)
-        required: false
-        default: 'false'
       run_budget_minutes:
         description: In-run budget before continuation dispatch
         required: false
@@ -33,6 +29,22 @@ on:
         description: Minimum iterations before chaining unless backlog is very high
         required: false
         default: '2'
+      backoff_base_sec:
+        description: Exponential backoff base delay in seconds
+        required: false
+        default: '2'
+      backoff_cap_sec:
+        description: Exponential backoff maximum delay in seconds
+        required: false
+        default: '300'
+      backoff_max_retries:
+        description: Maximum same-run rate-limit retries for the current item
+        required: false
+        default: '7'
+      backoff_jitter_pct:
+        description: Backoff jitter percentage (0-100+)
+        required: false
+        default: '25'
 
 permissions:
   actions: write
@@ -87,10 +99,10 @@ jobs:
           MAX_REQUEST_TIMEOUT_SEC_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.max_request_timeout_sec || '1800' }}
           MAX_ITERATIONS_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.max_iterations || '60' }}
           MIN_ITERATIONS_BEFORE_CHAIN_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.min_iterations_before_chain || '2' }}
-          DISABLE_PADDING_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.disable_padding || 'false' }}
+          BACKOFF_BASE_SEC_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.backoff_base_sec || '2' }}
+          BACKOFF_CAP_SEC_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.backoff_cap_sec || '300' }}
+          BACKOFF_MAX_RETRIES_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.backoff_max_retries || '7' }}
+          BACKOFF_JITTER_PCT_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.backoff_jitter_pct || '25' }}
         run: |
           set -euo pipefail
-          if [ "${DISABLE_PADDING_INPUT:-false}" != "false" ]; then
-            echo "Note: disable_padding is deprecated and ignored by adaptive drain runner"
-          fi
           ./scripts/drain_runner.sh

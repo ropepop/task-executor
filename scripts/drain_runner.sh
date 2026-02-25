@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Workflow-only long-running drain runner with adaptive continuation.
+# Workflow-only strict single-item drain runner with adaptive continuation.
 # Can be sourced for smoke tests; when executed directly it runs main().
 
 normalize_bool() {
@@ -22,16 +22,14 @@ safe_int() {
   fi
 }
 
-json_num() {
-  local expr="${1}"
-  local file="${2}"
-  jq -r "${expr} | tonumber? // 0" "${file}" 2>/dev/null || echo 0
-}
-
-json_str() {
-  local expr="${1}"
-  local file="${2}"
-  jq -r "${expr} // \"\"" "${file}" 2>/dev/null || echo ""
+max_int() {
+  local left="$(safe_int "${1:-0}")"
+  local right="$(safe_int "${2:-0}")"
+  if [ "${left}" -ge "${right}" ]; then
+    echo "${left}"
+  else
+    echo "${right}"
+  fi
 }
 
 determine_runtime_tier() {
@@ -45,47 +43,156 @@ determine_runtime_tier() {
   fi
 }
 
-# Prints: effective_progress<TAB>rate_limit_only<TAB>decision_code<TAB>should_stop
-# decision_code is one of: continue, no_backlog_remaining, max_chain_depth_reached,
-# rate_limited_only_no_success, no_progress
-evaluate_iteration_outcome() {
-  local backlog_before="$(safe_int "${1}")"
-  local backlog_after="$(safe_int "${2}")"
-  local succeeded_count="$(safe_int "${3}")"
-  local rate_limited_count="$(safe_int "${4}")"
-  local rate_limit_only_in="$(normalize_bool "${5}")"
-  local chain_depth="$(safe_int "${6}")"
-  local max_chain_depth="$(safe_int "${7}")"
+effective_rate_limit_only() {
+  local rate_limit_only_in="$(normalize_bool "${1:-false}")"
+  local succeeded_count="$(safe_int "${2:-0}")"
+  local rate_limited_count="$(safe_int "${3:-0}")"
 
-  local rate_limit_only="${rate_limit_only_in}"
-  if [ "${rate_limit_only}" != "true" ] && [ "${succeeded_count}" -eq 0 ] && [ "${rate_limited_count}" -gt 0 ]; then
-    rate_limit_only="true"
+  if [ "${rate_limit_only_in}" != "true" ] && [ "${succeeded_count}" -eq 0 ] && [ "${rate_limited_count}" -gt 0 ]; then
+    echo "true"
+    return 0
   fi
 
-  local effective_progress="false"
-  if [ "${succeeded_count}" -gt 0 ]; then
-    effective_progress="true"
-  elif [ "${backlog_after}" -lt "${backlog_before}" ] && [ "${rate_limit_only}" != "true" ]; then
-    effective_progress="true"
+  echo "${rate_limit_only_in}"
+}
+
+single_item_contract_ok() {
+  local attempted_count="$(safe_int "${1:-0}")"
+  local succeeded_count="$(safe_int "${2:-0}")"
+
+  if [ "${attempted_count}" -gt 1 ] || [ "${succeeded_count}" -gt 1 ]; then
+    echo "false"
+  else
+    echo "true"
+  fi
+}
+
+retry_cap_reached() {
+  local retry_count="$(safe_int "${1:-0}")"
+  local max_retries="$(safe_int "${2:-0}")"
+
+  if [ "${retry_count}" -gt "${max_retries}" ]; then
+    echo "true"
+  else
+    echo "false"
+  fi
+}
+
+compute_exponential_backoff_sec() {
+  local base_sec="$(safe_int "${1:-2}")"
+  local cap_sec="$(safe_int "${2:-300}")"
+  local jitter_pct="$(safe_int "${3:-25}")"
+  local retry_count="$(safe_int "${4:-1}")"
+
+  if [ "${base_sec}" -lt 1 ]; then
+    base_sec=1
+  fi
+  if [ "${cap_sec}" -lt "${base_sec}" ]; then
+    cap_sec="${base_sec}"
+  fi
+  if [ "${jitter_pct}" -lt 0 ]; then
+    jitter_pct=0
+  fi
+  if [ "${retry_count}" -lt 1 ]; then
+    retry_count=1
   fi
 
-  local decision_code="continue"
-  local should_stop="false"
+  local exp_sec="${base_sec}"
+  local i=1
+  while [ "${i}" -lt "${retry_count}" ]; do
+    if [ "${exp_sec}" -ge "${cap_sec}" ]; then
+      exp_sec="${cap_sec}"
+      break
+    fi
+    exp_sec=$((exp_sec * 2))
+    if [ "${exp_sec}" -gt "${cap_sec}" ]; then
+      exp_sec="${cap_sec}"
+      break
+    fi
+    i=$((i + 1))
+  done
+
+  local jitter_range=$((exp_sec * jitter_pct / 100))
+  local jitter_delta=0
+  if [ "${jitter_range}" -gt 0 ]; then
+    jitter_delta=$((RANDOM % (jitter_range * 2 + 1) - jitter_range))
+  fi
+
+  local backoff_sec=$((exp_sec + jitter_delta))
+  if [ "${backoff_sec}" -lt 1 ]; then
+    backoff_sec=1
+  fi
+  if [ "${backoff_sec}" -gt "${cap_sec}" ]; then
+    backoff_sec="${cap_sec}"
+  fi
+
+  echo "${backoff_sec}"
+}
+
+extract_iteration_metrics() {
+  local file="${1}"
+  jq -r '
+    def n(x): (x | tonumber? // 0);
+    def b(x): if x == true then "true" elif x == false then "false" else "unset" end;
+    [
+      n(.data.before.pendingCount // .before.pendingCount // 0),
+      n(.data.before.dispatchedCount // .before.dispatchedCount // 0),
+      n(.data.after.pendingCount // .after.pendingCount // 0),
+      n(.data.after.dispatchedCount // .after.dispatchedCount // 0),
+      n(.data.attemptedCount // .attemptedCount // 0),
+      n(.data.succeededCount // .succeededCount // 0),
+      n(.data.rateLimitedCount // .rateLimitedCount // 0),
+      b(
+        if ((.data | type) == "object" and (.data | has("rateLimitOnly"))) then
+          .data.rateLimitOnly
+        elif has("rateLimitOnly") then
+          .rateLimitOnly
+        else
+          null
+        end
+      ),
+      (.data.retryAfterSec // .retryAfterSec // "")
+    ] | @tsv
+  ' "${file}" 2>/dev/null || printf "0\t0\t0\t0\t0\t0\t0\tunset\t\n"
+}
+
+# Returns one of:
+# no_backlog_remaining, max_chain_depth_reached, single_item_contract_violation,
+# item_succeeded_continue, rate_limited_only_no_success, no_progress.
+determine_iteration_decision() {
+  local backlog_after="$(safe_int "${1:-0}")"
+  local attempted_count="$(safe_int "${2:-0}")"
+  local succeeded_count="$(safe_int "${3:-0}")"
+  local rate_limit_only="$(normalize_bool "${4:-false}")"
+  local chain_depth="$(safe_int "${5:-0}")"
+  local max_chain_depth="$(safe_int "${6:-500}")"
+
+  if [ "$(single_item_contract_ok "${attempted_count}" "${succeeded_count}")" != "true" ]; then
+    echo "single_item_contract_violation"
+    return 0
+  fi
+
   if [ "${backlog_after}" -le 0 ]; then
-    decision_code="no_backlog_remaining"
-    should_stop="true"
-  elif [ "${chain_depth}" -ge "${max_chain_depth}" ]; then
-    decision_code="max_chain_depth_reached"
-    should_stop="true"
-  elif [ "${rate_limit_only}" = "true" ]; then
-    decision_code="rate_limited_only_no_success"
-    should_stop="true"
-  elif [ "${effective_progress}" != "true" ]; then
-    decision_code="no_progress"
-    should_stop="true"
+    echo "no_backlog_remaining"
+    return 0
   fi
 
-  printf "%s\t%s\t%s\t%s\n" "${effective_progress}" "${rate_limit_only}" "${decision_code}" "${should_stop}"
+  if [ "${chain_depth}" -ge "${max_chain_depth}" ]; then
+    echo "max_chain_depth_reached"
+    return 0
+  fi
+
+  if [ "${succeeded_count}" -eq 1 ]; then
+    echo "item_succeeded_continue"
+    return 0
+  fi
+
+  if [ "${rate_limit_only}" = "true" ]; then
+    echo "rate_limited_only_no_success"
+    return 0
+  fi
+
+  echo "no_progress"
 }
 
 emit_summary() {
@@ -97,28 +204,34 @@ emit_summary() {
 }
 
 run_self_test() {
-  local out
+  # Contract validation.
+  [ "$(single_item_contract_ok 1 1)" = "true" ]
+  [ "$(single_item_contract_ok 2 1)" = "false" ]
+  [ "$(single_item_contract_ok 1 2)" = "false" ]
 
-  # Case: backlog cleared
-  out="$(evaluate_iteration_outcome 10 0 2 0 false 1 500)"
-  [ "$(echo "${out}" | cut -f3)" = "no_backlog_remaining" ]
+  # Rate-limit-only detection.
+  [ "$(effective_rate_limit_only false 0 5)" = "true" ]
+  [ "$(effective_rate_limit_only false 1 1)" = "false" ]
+  [ "$(effective_rate_limit_only true 0 0)" = "true" ]
 
-  # Case: succeeded > 0 and backlog remains => continue
-  out="$(evaluate_iteration_outcome 20 19 1 0 false 1 500)"
-  [ "$(echo "${out}" | cut -f1)" = "true" ]
-  [ "$(echo "${out}" | cut -f3)" = "continue" ]
+  # Exponential backoff deterministic checks (no jitter).
+  [ "$(compute_exponential_backoff_sec 2 300 0 1)" -eq 2 ]
+  [ "$(compute_exponential_backoff_sec 2 300 0 2)" -eq 4 ]
+  [ "$(compute_exponential_backoff_sec 2 300 0 3)" -eq 8 ]
+  [ "$(compute_exponential_backoff_sec 2 300 0 10)" -eq 300 ]
 
-  # Case: rate limited only => stop
-  out="$(evaluate_iteration_outcome 20 20 0 5 true 1 500)"
-  [ "$(echo "${out}" | cut -f3)" = "rate_limited_only_no_success" ]
+  # Retry-cap logic.
+  [ "$(retry_cap_reached 7 7)" = "false" ]
+  [ "$(retry_cap_reached 8 7)" = "true" ]
 
-  # Case: no progress => stop
-  out="$(evaluate_iteration_outcome 20 20 0 0 false 1 500)"
-  [ "$(echo "${out}" | cut -f3)" = "no_progress" ]
-
-  # Case: depth reached => stop
-  out="$(evaluate_iteration_outcome 20 19 1 0 false 500 500)"
-  [ "$(echo "${out}" | cut -f3)" = "max_chain_depth_reached" ]
+  # Success-gated progression and stop conditions.
+  [ "$(determine_iteration_decision 0 0 0 false 0 500)" = "no_backlog_remaining" ]
+  [ "$(determine_iteration_decision 0 2 0 false 0 500)" = "single_item_contract_violation" ]
+  [ "$(determine_iteration_decision 20 2 1 false 0 500)" = "single_item_contract_violation" ]
+  [ "$(determine_iteration_decision 20 1 1 false 0 500)" = "item_succeeded_continue" ]
+  [ "$(determine_iteration_decision 20 1 0 true 0 500)" = "rate_limited_only_no_success" ]
+  [ "$(determine_iteration_decision 20 1 0 false 0 500)" = "no_progress" ]
+  [ "$(determine_iteration_decision 20 1 1 false 500 500)" = "max_chain_depth_reached" ]
 
   echo "drain_runner self-test passed"
 }
@@ -144,12 +257,16 @@ main() {
   local max_iterations="$(safe_int "${MAX_ITERATIONS_INPUT:-60}")"
   local min_iterations_before_chain="$(safe_int "${MIN_ITERATIONS_BEFORE_CHAIN_INPUT:-2}")"
 
+  local backoff_base_sec="$(safe_int "${BACKOFF_BASE_SEC_INPUT:-2}")"
+  local backoff_cap_sec="$(safe_int "${BACKOFF_CAP_SEC_INPUT:-300}")"
+  local backoff_max_retries="$(safe_int "${BACKOFF_MAX_RETRIES_INPUT:-7}")"
+  local backoff_jitter_pct="$(safe_int "${BACKOFF_JITTER_PCT_INPUT:-25}")"
+
   local run_budget_sec=$((run_budget_minutes * 60))
   local min_request_timeout_sec=120
   local target_request_timeout_sec=900
   local dispatch_buffer_sec=90
   local max_chain_depth=500
-  local rate_limit_same_run_cooldown_sec=300
   local high_backlog_chain_threshold=300
 
   if [ "${run_budget_sec}" -lt 600 ]; then
@@ -165,6 +282,19 @@ main() {
     min_iterations_before_chain=1
   fi
 
+  if [ "${backoff_base_sec}" -lt 1 ]; then
+    backoff_base_sec=1
+  fi
+  if [ "${backoff_cap_sec}" -lt "${backoff_base_sec}" ]; then
+    backoff_cap_sec="${backoff_base_sec}"
+  fi
+  if [ "${backoff_max_retries}" -lt 0 ]; then
+    backoff_max_retries=0
+  fi
+  if [ "${backoff_jitter_pct}" -lt 0 ]; then
+    backoff_jitter_pct=0
+  fi
+
   local run_start_epoch
   run_start_epoch="$(date +%s)"
 
@@ -174,6 +304,7 @@ main() {
   local chain_action="none"
   local should_dispatch="false"
   local iteration_count=0
+  local exit_code=0
 
   local final_before_backlog=0
   local final_after_backlog=0
@@ -183,16 +314,11 @@ main() {
   local final_after_dispatched=0
   local final_attempted_count=0
   local final_succeeded_count=0
-  local final_failed_count=0
   local final_rate_limited_count=0
-  local final_progress_hint=""
-  local final_rate_limit_only=""
-  local final_retry_after_sec=""
-  local total_attempted_count=0
-  local total_succeeded_count=0
-  local total_failed_count=0
-  local total_rate_limited_count=0
-  local productive_iterations=0
+  local final_rate_limit_only="false"
+  local final_retry_after_sec="0"
+  local rate_limit_retry_count=0
+  local last_transition_was_success="false"
 
   while [ "${iteration_count}" -lt "${max_iterations}" ]; do
     iteration_count=$((iteration_count + 1))
@@ -247,6 +373,9 @@ main() {
         --header "X-Cron-Chain-Depth: ${chain_depth}" \
         --header "X-Cron-Runtime-Tier: ${runtime_tier}" \
         --header "X-Cron-Target-Runtime-Sec: ${request_timeout_sec}" \
+        --header "X-Cron-Processing-Mode: single-item-strict" \
+        --header "X-Cron-Max-Items: 1" \
+        --header "X-Cron-Backoff-Strategy: exponential-jitter" \
         "${drain_url}"
     )"
 
@@ -258,35 +387,35 @@ main() {
       exit 1
     fi
 
+    local metrics_line
+    metrics_line="$(extract_iteration_metrics "${response_file}")"
+
     local before_pending before_dispatched after_pending after_dispatched
-    local attempted_count succeeded_count failed_count rate_limited_count
-    local progress_hint rate_limit_only retry_after_sec
+    local attempted_count succeeded_count rate_limited_count rate_limit_only retry_after_sec
+    IFS=$'\t' read -r \
+      before_pending \
+      before_dispatched \
+      after_pending \
+      after_dispatched \
+      attempted_count \
+      succeeded_count \
+      rate_limited_count \
+      rate_limit_only \
+      retry_after_sec <<< "${metrics_line}"
 
-    before_pending="$(json_num '(.data.before.pendingCount // .before.pendingCount // 0)' "${response_file}")"
-    before_dispatched="$(json_num '(.data.before.dispatchedCount // .before.dispatchedCount // 0)' "${response_file}")"
-    after_pending="$(json_num '(.data.after.pendingCount // .after.pendingCount // 0)' "${response_file}")"
-    after_dispatched="$(json_num '(.data.after.dispatchedCount // .after.dispatchedCount // 0)' "${response_file}")"
-    attempted_count="$(json_num '(.data.attemptedCount // .attemptedCount // 0)' "${response_file}")"
-    succeeded_count="$(json_num '(.data.succeededCount // .succeededCount // 0)' "${response_file}")"
-    failed_count="$(json_num '(.data.failedCount // .failedCount // 0)' "${response_file}")"
-    rate_limited_count="$(json_num '(.data.rateLimitedCount // .rateLimitedCount // 0)' "${response_file}")"
+    before_pending="$(safe_int "${before_pending}")"
+    before_dispatched="$(safe_int "${before_dispatched}")"
+    after_pending="$(safe_int "${after_pending}")"
+    after_dispatched="$(safe_int "${after_dispatched}")"
+    attempted_count="$(safe_int "${attempted_count}")"
+    succeeded_count="$(safe_int "${succeeded_count}")"
+    rate_limited_count="$(safe_int "${rate_limited_count}")"
+    retry_after_sec="$(safe_int "${retry_after_sec}")"
+    rate_limit_only="$(effective_rate_limit_only "${rate_limit_only}" "${succeeded_count}" "${rate_limited_count}")"
 
-    progress_hint="$(json_str '(if ((.data|type)=="object" and (.data|has("progressHint"))) then (if .data.progressHint==true then "true" elif .data.progressHint==false then "false" else "unset" end) elif has("progressHint") then (if .progressHint==true then "true" elif .progressHint==false then "false" else "unset" end) else "unset" end)' "${response_file}")"
-    rate_limit_only="$(json_str '(if ((.data|type)=="object" and (.data|has("rateLimitOnly"))) then (if .data.rateLimitOnly==true then "true" elif .data.rateLimitOnly==false then "false" else "unset" end) elif has("rateLimitOnly") then (if .rateLimitOnly==true then "true" elif .rateLimitOnly==false then "false" else "unset" end) else "unset" end)' "${response_file}")"
-    retry_after_sec="$(json_str '(.data.retryAfterSec // .retryAfterSec // "")' "${response_file}")"
-
-    if [ "${rate_limit_only}" = "unset" ] || [ -z "${rate_limit_only}" ]; then
-      rate_limit_only="false"
-    fi
-
-    local backlog_before backlog_after outcome effective_progress should_stop
+    local backlog_before backlog_after
     backlog_before=$((before_pending + before_dispatched))
     backlog_after=$((after_pending + after_dispatched))
-    outcome="$(evaluate_iteration_outcome "${backlog_before}" "${backlog_after}" "${succeeded_count}" "${rate_limited_count}" "${rate_limit_only}" "${chain_depth}" "${max_chain_depth}")"
-    effective_progress="$(echo "${outcome}" | cut -f1)"
-    rate_limit_only="$(echo "${outcome}" | cut -f2)"
-    decision_code="$(echo "${outcome}" | cut -f3)"
-    should_stop="$(echo "${outcome}" | cut -f4)"
 
     final_before_pending="${before_pending}"
     final_before_dispatched="${before_dispatched}"
@@ -296,75 +425,122 @@ main() {
     final_after_backlog="${backlog_after}"
     final_attempted_count="${attempted_count}"
     final_succeeded_count="${succeeded_count}"
-    final_failed_count="${failed_count}"
     final_rate_limited_count="${rate_limited_count}"
-    final_progress_hint="${progress_hint}"
     final_rate_limit_only="${rate_limit_only}"
     final_retry_after_sec="${retry_after_sec}"
-    total_attempted_count=$((total_attempted_count + attempted_count))
-    total_succeeded_count=$((total_succeeded_count + succeeded_count))
-    total_failed_count=$((total_failed_count + failed_count))
-    total_rate_limited_count=$((total_rate_limited_count + rate_limited_count))
-    if [ "${effective_progress}" = "true" ]; then
-      productive_iterations=$((productive_iterations + 1))
-    fi
 
-    echo "Iteration ${iteration_count} backlogBefore=${backlog_before} backlogAfter=${backlog_after} succeeded=${succeeded_count} rateLimited=${rate_limited_count} progressHint=${progress_hint} rateLimitOnly=${rate_limit_only}"
+    echo "Iteration ${iteration_count} backlogBefore=${backlog_before} backlogAfter=${backlog_after} attempted=${attempted_count} succeeded=${succeeded_count} rateLimited=${rate_limited_count} rateLimitOnly=${rate_limit_only} retryAfterSec=${retry_after_sec}"
 
-    if [ "${should_stop}" = "true" ]; then
-      case "${decision_code}" in
-        no_backlog_remaining)
-          decision_reason="No backlog remains after drain"
-          ;;
-        max_chain_depth_reached)
-          decision_reason="Maximum chain depth reached (${chain_depth}/${max_chain_depth})"
-          ;;
-        rate_limited_only_no_success)
-          local retry_sec
-          retry_sec="$(safe_int "${retry_after_sec}")"
-          local now2 remaining2
-          now2="$(date +%s)"
-          remaining2=$((run_budget_sec - (now2 - run_start_epoch)))
-          if [ "${retry_sec}" -gt 0 ] && [ "${retry_sec}" -le "${rate_limit_same_run_cooldown_sec}" ] && [ "${remaining2}" -gt $((retry_sec + dispatch_buffer_sec + 30)) ] && [ "${iteration_count}" -lt "${max_iterations}" ]; then
-            echo "Rate-limited-only iteration; retryAfterSec=${retry_sec}, sleeping and retrying in same run"
-            sleep "${retry_sec}"
-            continue
-          fi
-          decision_reason="Rate-limited-only without safe same-run retry window"
-          ;;
-        no_progress)
-          decision_reason="No effective progress signal"
-          ;;
-        *)
-          decision_reason="Stopped by safety condition"
-          ;;
-      esac
-      break
-    fi
+    decision_code="$(
+      determine_iteration_decision \
+        "${backlog_after}" \
+        "${attempted_count}" \
+        "${succeeded_count}" \
+        "${rate_limit_only}" \
+        "${chain_depth}" \
+        "${max_chain_depth}"
+    )"
 
-    # Productive iteration; decide whether to continue same run or hand off to next run.
-    local now3 remaining3
-    now3="$(date +%s)"
-    remaining3=$((run_budget_sec - (now3 - run_start_epoch)))
-    if [ "${remaining3}" -le $((dispatch_buffer_sec + min_request_timeout_sec)) ]; then
-      should_dispatch="true"
-      chain_action="self_dispatch"
-      decision_code="run_budget_exhausted_with_progress"
-      decision_reason="Productive run reached budget boundary"
-      break
-    fi
+    case "${decision_code}" in
+      no_backlog_remaining)
+        decision_reason="No backlog remains after drain"
+        break
+        ;;
+      max_chain_depth_reached)
+        decision_reason="Maximum chain depth reached (${chain_depth}/${max_chain_depth})"
+        break
+        ;;
+      single_item_contract_violation)
+        decision_reason="Single-item contract violated (attempted=${attempted_count}, succeeded=${succeeded_count})"
+        exit_code=1
+        break
+        ;;
+      item_succeeded_continue)
+        last_transition_was_success="true"
+        rate_limit_retry_count=0
+        decision_reason="Current item executed successfully; evaluating next item"
 
-    decision_code="continue_same_run"
-    decision_reason="Productive iteration with remaining budget"
+        local now_success remaining_success
+        now_success="$(date +%s)"
+        remaining_success=$((run_budget_sec - (now_success - run_start_epoch)))
+        if [ "${remaining_success}" -le $((dispatch_buffer_sec + min_request_timeout_sec)) ]; then
+          should_dispatch="true"
+          chain_action="self_dispatch"
+          decision_code="run_budget_exhausted_with_progress"
+          decision_reason="Run budget boundary reached after successful item execution"
+          break
+        fi
+
+        decision_code="item_succeeded_continue"
+        continue
+        ;;
+      rate_limited_only_no_success)
+        last_transition_was_success="false"
+        rate_limit_retry_count=$((rate_limit_retry_count + 1))
+
+        if [ "$(retry_cap_reached "${rate_limit_retry_count}" "${backoff_max_retries}")" = "true" ]; then
+          decision_code="rate_limit_retry_cap_reached"
+          decision_reason="Rate-limit retry cap reached (${rate_limit_retry_count}/${backoff_max_retries})"
+          break
+        fi
+
+        local computed_backoff_sec sleep_sec
+        computed_backoff_sec="$(compute_exponential_backoff_sec "${backoff_base_sec}" "${backoff_cap_sec}" "${backoff_jitter_pct}" "${rate_limit_retry_count}")"
+        sleep_sec="$(max_int "${computed_backoff_sec}" "${retry_after_sec}")"
+
+        local now_rate remaining_rate minimum_needed
+        now_rate="$(date +%s)"
+        remaining_rate=$((run_budget_sec - (now_rate - run_start_epoch)))
+        minimum_needed=$((sleep_sec + dispatch_buffer_sec + 30))
+        if [ "${remaining_rate}" -le "${minimum_needed}" ]; then
+          decision_code="rate_limit_budget_exhausted"
+          decision_reason="Insufficient budget for backoff retry (remaining=${remaining_rate}s, need>${minimum_needed}s)"
+          break
+        fi
+
+        if [ "${iteration_count}" -ge "${max_iterations}" ]; then
+          decision_code="rate_limit_retry_cap_reached"
+          decision_reason="Rate-limited with no iterations left for another retry"
+          break
+        fi
+
+        echo "Rate-limited-only iteration; retry=${rate_limit_retry_count}/${backoff_max_retries} retryAfterSec=${retry_after_sec} computedBackoffSec=${computed_backoff_sec} sleepSec=${sleep_sec}"
+        sleep "${sleep_sec}"
+        continue
+        ;;
+      no_progress)
+        last_transition_was_success="false"
+        decision_reason="No item succeeded and no rate-limit retry path available"
+        break
+        ;;
+      *)
+        last_transition_was_success="false"
+        decision_reason="Stopped by safety condition"
+        break
+        ;;
+    esac
   done
 
+  if [ "${iteration_count}" -ge "${max_iterations}" ] && [ "${final_after_backlog}" -gt 0 ] && [ "${last_transition_was_success}" = "true" ] && [ "${decision_code}" = "item_succeeded_continue" ]; then
+    should_dispatch="true"
+    chain_action="self_dispatch"
+    decision_code="max_iterations_reached_with_progress"
+    decision_reason="Reached max iterations after successful item execution"
+  fi
+
   if [ -z "${decision_reason}" ]; then
-    if [ "${decision_code}" = "run_budget_exhausted" ] && [ "${final_after_backlog}" -gt 0 ] && [ "${final_succeeded_count}" -gt 0 ]; then
+    if [ "${iteration_count}" -ge "${max_iterations}" ] && [ "${final_after_backlog}" -gt 0 ] && [ "${last_transition_was_success}" = "true" ]; then
+      should_dispatch="true"
+      chain_action="self_dispatch"
+      decision_code="max_iterations_reached_with_progress"
+      decision_reason="Reached max iterations after successful item execution"
+    elif [ "${decision_code}" = "run_budget_exhausted" ] && [ "${final_after_backlog}" -gt 0 ] && [ "${last_transition_was_success}" = "true" ]; then
       should_dispatch="true"
       chain_action="self_dispatch"
       decision_code="run_budget_exhausted_with_progress"
-      decision_reason="Budget exhausted after productive work"
+      decision_reason="Budget exhausted after successful item execution"
     else
+      decision_code="iteration_or_budget_guard_stop"
       decision_reason="Stopped after reaching iteration or budget guard"
       chain_action="none"
     fi
@@ -378,15 +554,9 @@ main() {
     should_dispatch="false"
     chain_action="none"
   fi
-  if [ "${decision_code}" = "rate_limited_only_no_success" ] || [ "${decision_code}" = "no_progress" ]; then
+  if [ "${last_transition_was_success}" != "true" ]; then
     should_dispatch="false"
     chain_action="none"
-  fi
-  if [ "${should_dispatch}" = "true" ] && [ "${productive_iterations}" -lt 1 ]; then
-    should_dispatch="false"
-    chain_action="none"
-    decision_code="no_productive_iterations_no_chain"
-    decision_reason="Backlog remains but no productive iterations were observed"
   fi
   if [ "${should_dispatch}" = "true" ] && [ "${iteration_count}" -lt "${min_iterations_before_chain}" ] && [ "${final_after_backlog}" -lt "${high_backlog_chain_threshold}" ]; then
     should_dispatch="false"
@@ -407,18 +577,13 @@ main() {
   echo "Backlog after: ${final_after_backlog} (pending=${final_after_pending}, dispatched=${final_after_dispatched})"
   echo "Remaining backlog: ${final_after_backlog}"
   echo "Iterations executed: ${iteration_count}"
-  echo "Productive iterations: ${productive_iterations}"
   echo "Attempted count: ${final_attempted_count}"
   echo "Succeeded count: ${final_succeeded_count}"
-  echo "Failed count: ${final_failed_count}"
   echo "Rate-limited count: ${final_rate_limited_count}"
-  echo "Total attempted count: ${total_attempted_count}"
-  echo "Total succeeded count: ${total_succeeded_count}"
-  echo "Total failed count: ${total_failed_count}"
-  echo "Total rate-limited count: ${total_rate_limited_count}"
-  echo "Progress hint: ${final_progress_hint}"
   echo "Rate-limit-only: ${final_rate_limit_only}"
   echo "Retry-after seconds: ${final_retry_after_sec}"
+  echo "Rate-limit retries used: ${rate_limit_retry_count}"
+  echo "Backoff config: base=${backoff_base_sec}s cap=${backoff_cap_sec}s jitterPct=${backoff_jitter_pct} maxRetries=${backoff_max_retries}"
   echo "Chain context: depth=${chain_depth}, origin=${chain_origin}"
   echo "Chain guard: minIterationsBeforeChain=${min_iterations_before_chain}, highBacklogThreshold=${high_backlog_chain_threshold}"
   echo "Decision code: ${decision_code}"
@@ -434,18 +599,13 @@ main() {
   emit_summary "- Backlog after: \`${final_after_backlog}\` (pending=\`${final_after_pending}\`, dispatched=\`${final_after_dispatched}\`)"
   emit_summary "- Remaining backlog: \`${final_after_backlog}\`"
   emit_summary "- Iterations executed: \`${iteration_count}\`"
-  emit_summary "- Productive iterations: \`${productive_iterations}\`"
   emit_summary "- Attempted count: \`${final_attempted_count}\`"
   emit_summary "- Succeeded count: \`${final_succeeded_count}\`"
-  emit_summary "- Failed count: \`${final_failed_count}\`"
   emit_summary "- Rate-limited count: \`${final_rate_limited_count}\`"
-  emit_summary "- Total attempted count: \`${total_attempted_count}\`"
-  emit_summary "- Total succeeded count: \`${total_succeeded_count}\`"
-  emit_summary "- Total failed count: \`${total_failed_count}\`"
-  emit_summary "- Total rate-limited count: \`${total_rate_limited_count}\`"
-  emit_summary "- Progress hint: \`${final_progress_hint}\`"
   emit_summary "- Rate-limit-only: \`${final_rate_limit_only}\`"
   emit_summary "- Retry-after seconds: \`${final_retry_after_sec}\`"
+  emit_summary "- Rate-limit retries used: \`${rate_limit_retry_count}\`"
+  emit_summary "- Backoff config: base=\`${backoff_base_sec}\` cap=\`${backoff_cap_sec}\` jitterPct=\`${backoff_jitter_pct}\` maxRetries=\`${backoff_max_retries}\`"
   emit_summary "- Chain depth: \`${chain_depth}\` (max \`${max_chain_depth}\`)"
   emit_summary "- Chain origin: \`${chain_origin}\`"
   emit_summary "- Chain guard min iterations: \`${min_iterations_before_chain}\`"
@@ -458,7 +618,7 @@ main() {
   emit_summary "- Chain action: \`${chain_action}\`"
 
   if [ "${should_dispatch}" != "true" ]; then
-    return 0
+    return "${exit_code}"
   fi
 
   local next_chain_depth
@@ -476,6 +636,10 @@ main() {
       --arg max_request_timeout_sec "${max_request_timeout_sec}" \
       --arg max_iterations "${max_iterations}" \
       --arg min_iterations_before_chain "${min_iterations_before_chain}" \
+      --arg backoff_base_sec "${backoff_base_sec}" \
+      --arg backoff_cap_sec "${backoff_cap_sec}" \
+      --arg backoff_max_retries "${backoff_max_retries}" \
+      --arg backoff_jitter_pct "${backoff_jitter_pct}" \
       '{
         ref:$ref,
         inputs:{
@@ -484,7 +648,11 @@ main() {
           run_budget_minutes:$run_budget_minutes,
           max_request_timeout_sec:$max_request_timeout_sec,
           max_iterations:$max_iterations,
-          min_iterations_before_chain:$min_iterations_before_chain
+          min_iterations_before_chain:$min_iterations_before_chain,
+          backoff_base_sec:$backoff_base_sec,
+          backoff_cap_sec:$backoff_cap_sec,
+          backoff_max_retries:$backoff_max_retries,
+          backoff_jitter_pct:$backoff_jitter_pct
         }
       }'
   )"
@@ -520,6 +688,7 @@ main() {
 
   emit_summary "- Self-dispatch status: \`${dispatch_status}\`"
   emit_summary "- Self-dispatch result: queued next worker with \`chain_depth=${next_chain_depth}\`"
+  return "${exit_code}"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

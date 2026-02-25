@@ -64,7 +64,10 @@ Set the environment variable according to your platform's documentation.
      - `max_request_timeout_sec` (default `1800`)
      - `max_iterations` (default `60`)
      - `min_iterations_before_chain` (default `2`)
-     - `disable_padding` (deprecated, ignored)
+     - `backoff_base_sec` (default `2`)
+     - `backoff_cap_sec` (default `300`)
+     - `backoff_max_retries` (default `7`)
+     - `backoff_jitter_pct` (default `25`)
 4. Wait for execution to complete
 5. Check logs for success/failure
 
@@ -104,26 +107,32 @@ Use [crontab.guru](https://crontab.guru) to validate cron expressions.
 
 ### Operation Queue Drain Backlog Chaining
 
-The drain workflow runs an adaptive loop and can queue a follow-up worker (`workflow_dispatch`) when backlog remains and run budget is exhausted.
+The drain workflow runs a strict single-item loop and can queue a follow-up worker (`workflow_dispatch`) when backlog remains and run budget is exhausted after a successful item transition.
 
 Guard conditions:
 - Chain only if `after.pendingCount + after.dispatchedCount > 0`
-- Chain only if progress exists:
-  - Preferred signals: `succeededCount > 0` or backlog decrease when not rate-limit-only
-  - Stop on `rate_limited_only_no_success` and `no_progress`
+- Chain only if last transition succeeded (`succeededCount == 1`)
 - Chain only if current `chain_depth < 500`
 - Max one self-dispatch per run
 
+Strict-mode behavior:
+- Enforces `attemptedCount <= 1` and `succeededCount <= 1` on every iteration
+- Fails fast with `single_item_contract_violation` when either counter is greater than 1
+- Rate limit is detected when `rateLimitOnly == true` or (`succeededCount == 0` and `rateLimitedCount > 0`)
+- Runner retries same item path with exponential+jitter backoff:
+  - `delay = min(backoff_cap_sec, backoff_base_sec * 2^(retryIndex-1)) ± jitter`
+  - default `backoff_base_sec=2`, `backoff_cap_sec=300`, `backoff_jitter_pct=25`, `backoff_max_retries=7`
+  - if `retryAfterSec` is returned, sleep uses `max(retryAfterSec, computedDelay)`
+- Stops gracefully on `rate_limit_retry_cap_reached` or `rate_limit_budget_exhausted` without dispatch
+
 Additional behavior:
-- In-run loop can execute multiple iterations within one workflow run
 - Follow-up runs use `chain_origin=auto-backlog` and increment `chain_depth`
 - If chaining was required by guard conditions but workflow self-dispatch fails (non-2xx), the job fails
 - No extra repository secrets are required; chaining uses the workflow `GITHUB_TOKEN`
-- Drain requests include trace/runtime headers for observability: `X-Cron-Source`, `X-Cron-Run-Id`, `X-Cron-Event`, `X-Cron-Chain-Depth`, `X-Cron-Runtime-Tier`, `X-Cron-Target-Runtime-Sec`
+- Drain requests include trace/runtime headers and strict-mode hints:
+  - `X-Cron-Source`, `X-Cron-Run-Id`, `X-Cron-Event`, `X-Cron-Chain-Depth`, `X-Cron-Runtime-Tier`, `X-Cron-Target-Runtime-Sec`
+  - `X-Cron-Processing-Mode`, `X-Cron-Max-Items`, `X-Cron-Backoff-Strategy`
 - Step summary includes: `decision_code`, `decision_reason`, `iteration_count`, `run_budget_sec`, `remaining_budget_sec`, `chain_action`
-
-Implementation note:
-- Workflow-side runtime padding has been removed in favor of adaptive looping + continuation.
 
 ### Fallback Dispatch Guard
 
@@ -210,8 +219,12 @@ Adjust based on your data volume and processing needs.
 If you encounter rate limits:
 
 1. Increase interval between cron runs
-2. Reduce batch sizes in endpoint implementations
-3. Implement exponential backoff in workflows
+2. Ensure endpoint single-item mode is enabled and honoring `X-Cron-Max-Items: 1`
+3. Tune workflow backoff inputs:
+   - `backoff_base_sec`
+   - `backoff_cap_sec`
+   - `backoff_max_retries`
+   - `backoff_jitter_pct`
 
 ### Concurrent Execution
 
