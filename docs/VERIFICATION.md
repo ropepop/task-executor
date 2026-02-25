@@ -112,7 +112,7 @@ After enabling and configuring:
 
 1. Wait for the next scheduled run:
 
-   - **Operation Queue Drain**: At 2, 7, 12, 17... minutes past the hour
+   - **Operation Queue Drain**: At 2, 8, 14, 20... minutes past the hour
    - **Cache Refresh**: At 4, 14, 24, 34... minutes past the hour
 
 2. Go to: https://github.com/ropepop/task-executor/actions
@@ -133,7 +133,7 @@ After 24 hours, check:
 
 **Expected Statistics (per 24 hours):**
 
-- **Operation Queue Drain**: ~288 runs (every 5 minutes)
+- **Operation Queue Drain**: ~240 runs (every 6 minutes)
 - **Cache Refresh**: ~144 runs (every 10 minutes)
 - **Success rate**: Should be >95%
 
@@ -272,7 +272,7 @@ After 48 hours of operation, you should see:
 
 | Metric | Expected Value |
 |--------|----------------|
-| Operation Queue Drain runs/day | ~288 |
+| Operation Queue Drain runs/day | ~240 |
 | Cache Refresh runs/day | ~144 |
 | Success rate | >95% |
 | Average execution time (drain) | 60-120 seconds (tier-dependent) |

@@ -127,7 +127,7 @@ Status: ⏳ Awaiting Activation
 
 ### Operation Queue Drain
 
-**Schedule**: Every 5 minutes (at 2, 7, 12, 17... min past the hour)
+**Schedule**: Every 6 minutes (at 2, 8, 14, 20... min past the hour)
 
 **Flow**:
 
@@ -211,9 +211,9 @@ Logs show: "Refresh status: 200" + JSON response
 
 | Metric                      | Value (24h)    | Value (7d)       |
 | --------------------------- | -------------- | ---------------- |
-| Operation Queue Drain runs  | ~288           | ~2,016           |
+| Operation Queue Drain runs  | ~240           | ~1,680           |
 | Cache Refresh runs          | ~144           | ~1,008           |
-| Total workflow runs         | ~432           | ~3,024           |
+| Total workflow runs         | ~384           | ~2,688           |
 | GitHub Actions minutes used | ~10-15 min/day | ~70-105 min/week |
 
 **Note**: GitHub Free tier includes 2,000 minutes/month, which is sufficient for these cron jobs.

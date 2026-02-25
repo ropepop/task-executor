@@ -8,7 +8,7 @@ The public cron jobs repository has been created with the following structure:
 notiolink-cron-jobs/
 ├── .github/
 │   └── workflows/
-│       ├── stalled-runner-cron.yml      # Operation Queue Drain (every 5 min)
+│       ├── stalled-runner-cron.yml      # Operation Queue Drain (every 6 min)
 │       └── cache-refresh-cron.yml       # Cache Refresh (every 10 min)
 ├── docs/
 │   ├── QUICKSTART.md                    # 5-minute setup guide
@@ -110,7 +110,7 @@ Before making public:
 
 | Workflow              | Schedule          | Frequency    | Endpoint                                          |
 | --------------------- | ----------------- | ------------ | ------------------------------------------------- |
-| Operation Queue Drain | `2-59/5 * * * *`  | Every 5 min  | `/api/internal/pipeline/operations/actions/drain` |
+| Operation Queue Drain | `2-59/6 * * * *`  | Every 6 min  | `/api/internal/pipeline/operations/actions/drain` |
 | Cache Refresh         | `4-59/10 * * * *` | Every 10 min | `/api/internal/cache/refresh`                     |
 
 ## Required Secrets

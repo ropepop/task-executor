@@ -75,7 +75,7 @@ Edit the cron expression in the workflow YAML files:
 ```yaml
 on:
   schedule:
-    - cron: '2-59/5 * * * *' # Modify this line
+    - cron: '2-59/6 * * * *' # Modify this line
 ```
 
 Cron format: `minute hour day month weekday`

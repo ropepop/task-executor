@@ -10,7 +10,7 @@ This repository contains GitHub Actions workflows that trigger scheduled mainten
 
 ### 1. Operation Queue Drain
 
-**Schedule**: Every 5 minutes (at 2, 7, 12, 17, ..., 57 minutes past the hour)
+**Schedule**: Every 6 minutes (at 2, 8, 14, 20, ..., 56 minutes past the hour)
 
 **Purpose**: Processes stalled operations in the queue to ensure reliable execution of background tasks.
 

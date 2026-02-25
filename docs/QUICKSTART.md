@@ -46,7 +46,7 @@ Repeat for **Cache Refresh** workflow.
 
 Your cron jobs will now run automatically:
 
-- **Operation Queue Drain**: Every 5 minutes
+- **Operation Queue Drain**: Every 6 minutes
 - **Cache Refresh**: Every 10 minutes
 
 ## What's Next?
