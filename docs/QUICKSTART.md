@@ -37,7 +37,7 @@ vercel env add CRON_SECRET
 1. Go to **Actions** tab
 2. Click **Operation Queue Drain**
 3. Click **Run workflow**
-4. Wait ~30 seconds
+4. Wait 1-2 minutes (workflow enforces 60/90/120s by `chain_depth`)
 5. Check for ✅ green checkmark
 
 Repeat for **Cache Refresh** workflow.

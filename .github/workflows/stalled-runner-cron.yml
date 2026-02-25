@@ -52,6 +52,7 @@ jobs:
         run: |
           set -euo pipefail
 
+          run_start_epoch="$(date +%s)"
           drain_url="${STALLED_RUNNER_BASE_URL%/}/api/internal/pipeline/operations/actions/drain"
           response_file="$(mktemp)"
           chain_depth_raw="${CHAIN_DEPTH_INPUT:-0}"
@@ -61,13 +62,22 @@ jobs:
             chain_depth=0
           fi
           chain_origin="${CHAIN_ORIGIN_INPUT:-manual}"
+          runtime_tier="normal"
+          target_runtime_sec=60
+          if [ "${chain_depth}" -ge 8 ]; then
+            runtime_tier="severe"
+            target_runtime_sec=120
+          elif [ "${chain_depth}" -ge 3 ]; then
+            runtime_tier="heavy"
+            target_runtime_sec=90
+          fi
 
           status_code="$(
             curl \
               --silent \
               --show-error \
               --connect-timeout 10 \
-              --max-time 120 \
+              --max-time 180 \
               --output "${response_file}" \
               --write-out '%{http_code}' \
               --request POST \
@@ -77,6 +87,8 @@ jobs:
               --header "X-Cron-Run-Id: ${GITHUB_RUN_ID}" \
               --header "X-Cron-Event: ${GITHUB_EVENT_NAME}" \
               --header "X-Cron-Chain-Depth: ${chain_depth}" \
+              --header "X-Cron-Runtime-Tier: ${runtime_tier}" \
+              --header "X-Cron-Target-Runtime-Sec: ${target_runtime_sec}" \
               "${drain_url}"
           )"
 
@@ -97,7 +109,38 @@ jobs:
           after_stalled_total="$(jq -r '(.data.after.stalledTotal // .after.stalledTotal // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
           after_never_dispatched="$(jq -r '(.data.after.neverDispatchedCount // .after.neverDispatchedCount // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
           processed_estimate="$(jq -r '(.data.processedEstimate // .processedEstimate // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
-          progress_hint="$(jq -r 'if (.data.progressHint // .progressHint) == true then "true" elif (.data.progressHint // .progressHint) == false then "false" else "unset" end' "${response_file}" 2>/dev/null || echo unset)"
+          progress_hint="$(
+            jq -r '
+              if ((.data | type) == "object" and (.data | has("progressHint"))) then
+                if .data.progressHint == true then "true"
+                elif .data.progressHint == false then "false"
+                else "unset" end
+              elif has("progressHint") then
+                if .progressHint == true then "true"
+                elif .progressHint == false then "false"
+                else "unset" end
+              else
+                "unset"
+              end
+            ' "${response_file}" 2>/dev/null || echo unset
+          )"
+          runtime_budget_sec="$(
+            jq -r '
+              if ((.data | type) == "object" and (.data | has("runtimeBudgetSec"))) then
+                (.data.runtimeBudgetSec | tonumber? // 20)
+              elif has("runtimeBudgetSec") then
+                (.runtimeBudgetSec | tonumber? // 20)
+              elif ((.data | type) == "object" and (.data | has("timeBudgetMs"))) then
+                ((.data.timeBudgetMs | tonumber? // 0) / 1000 | floor)
+              elif has("timeBudgetMs") then
+                ((.timeBudgetMs | tonumber? // 0) / 1000 | floor)
+              else
+                20
+              end
+            ' "${response_file}" 2>/dev/null || echo 20
+          )"
+          runtime_used_ms="$(jq -r '(.data.runtimeUsedMs // .runtimeUsedMs // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
+          runtime_tier_reported="$(jq -r '(.data.runtimeTier // .runtimeTier // "unknown")' "${response_file}" 2>/dev/null || echo unknown)"
 
           before_backlog=$((before_pending + before_dispatched))
           after_backlog=$((after_pending + after_dispatched))
@@ -137,6 +180,19 @@ jobs:
             decision_reason="Backlog remains and progress made (${progress_signal})"
           fi
 
+          run_before_pad_epoch="$(date +%s)"
+          elapsed_before_pad_sec=$((run_before_pad_epoch - run_start_epoch))
+          padding_sec=$((target_runtime_sec - elapsed_before_pad_sec))
+          if [ "${padding_sec}" -gt 0 ]; then
+            echo "Applying runtime padding: sleeping ${padding_sec}s to hit target ${target_runtime_sec}s"
+            sleep "${padding_sec}"
+          else
+            padding_sec=0
+            echo "No runtime padding needed (elapsed=${elapsed_before_pad_sec}s, target=${target_runtime_sec}s)"
+          fi
+          run_end_epoch="$(date +%s)"
+          elapsed_total_sec=$((run_end_epoch - run_start_epoch))
+
           echo "Backlog before: ${before_backlog} (pending=${before_pending}, dispatched=${before_dispatched})"
           echo "Backlog after: ${after_backlog} (pending=${after_pending}, dispatched=${after_dispatched})"
           echo "Stalled total before: ${before_stalled_total}"
@@ -146,6 +202,9 @@ jobs:
           echo "Processed estimate: ${processed_estimate}"
           echo "Progress hint: ${progress_hint}"
           echo "Progress signal: ${progress_signal}"
+          echo "Runtime request: tier=${runtime_tier}, targetSec=${target_runtime_sec}"
+          echo "Runtime applied: tier=${runtime_tier_reported}, budgetSec=${runtime_budget_sec}, usedMs=${runtime_used_ms}"
+          echo "Runtime wall-clock: elapsedBeforePadSec=${elapsed_before_pad_sec}, paddingSec=${padding_sec}, elapsedTotalSec=${elapsed_total_sec}"
           echo "Chain context: depth=${chain_depth}, origin=${chain_origin}"
           echo "Chain decision: ${should_chain} (${decision_reason})"
 
@@ -162,6 +221,9 @@ jobs:
             echo "- Processed estimate: \`${processed_estimate}\`"
             echo "- Progress hint: \`${progress_hint}\`"
             echo "- Progress signal: \`${progress_signal}\`"
+            echo "- Runtime request: tier=\`${runtime_tier}\`, targetSec=\`${target_runtime_sec}\`"
+            echo "- Runtime applied: tier=\`${runtime_tier_reported}\`, budgetSec=\`${runtime_budget_sec}\`, usedMs=\`${runtime_used_ms}\`"
+            echo "- Runtime wall-clock: elapsedBeforePadSec=\`${elapsed_before_pad_sec}\`, paddingSec=\`${padding_sec}\`, elapsedTotalSec=\`${elapsed_total_sec}\`"
             echo "- Chain depth: \`${chain_depth}\` (max \`${max_chain_depth}\`)"
             echo "- Chain origin: \`${chain_origin}\`"
             echo "- Chain decision: \`${should_chain}\`"
@@ -188,7 +250,7 @@ jobs:
               --silent \
               --show-error \
               --connect-timeout 10 \
-              --max-time 30 \
+              --max-time 60 \
               --output "${dispatch_response_file}" \
               --write-out '%{http_code}' \
               --request POST \

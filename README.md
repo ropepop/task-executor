@@ -19,10 +19,11 @@ This repository contains GitHub Actions workflows that trigger scheduled mainten
 **What it does**:
 
 - Identifies operations that have been stalled for >45 seconds
-- Processes up to 200 operations per run
-- Scans up to 5000 operations within a 20-second time budget
+- Uses adaptive runtime tiers (`normal=60s`, `heavy=90s`, `severe=120s`) based on `chain_depth`
+- Enforces per-tier wall-clock runtime in the workflow by padding successful runs to target duration when the API returns early
+- Uses per-tier processing/scan caps (`normal=400/7500`, `heavy=600/10000`, `severe=800/12500`, legacy fallback `200/5000`)
 - Returns before/after snapshots of the queue state
-- Sends trace headers (`X-Cron-Source`, `X-Cron-Run-Id`, `X-Cron-Event`, `X-Cron-Chain-Depth`) with each drain request
+- Sends trace/runtime headers (`X-Cron-Source`, `X-Cron-Run-Id`, `X-Cron-Event`, `X-Cron-Chain-Depth`, `X-Cron-Runtime-Tier`, `X-Cron-Target-Runtime-Sec`) with each drain request
 - Uses `progressHint` when returned by the API, with fallback progress signals from response deltas (`processedEstimate`, backlog, stalled, never-dispatched)
 - Guardedly self-dispatches a follow-up drain worker when backlog remains and progress was made
 - Stops self-dispatch when backlog is empty, no progress is made, or chain depth reaches 24

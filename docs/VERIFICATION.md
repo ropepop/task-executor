@@ -46,7 +46,7 @@ This guide helps you verify that the cron jobs are functioning correctly in the 
 2. Click **"Run workflow"** button
 3. Select branch: `main`
 4. Click **"Run workflow"**
-5. Wait for the run to complete (~30-60 seconds)
+5. Wait for the run to complete (~1-2 minutes, tier-dependent)
 6. Click on the run to view logs
 
 **Expected Logs:**
@@ -57,6 +57,7 @@ This guide helps you verify that the cron jobs are functioning correctly in the 
 ✓ Drain operation queue
   - "Drain status: 200" or "Drain status: 201"
   - JSON response from endpoint
+  - Runtime lines: "Runtime request", "Runtime applied", "Runtime wall-clock"
   - "Operation queue drain failed" should NOT appear
 ```
 
@@ -65,7 +66,18 @@ This guide helps you verify that the cron jobs are functioning correctly in the 
 - ✅ Green checkmark ✓
 - ✅ HTTP status code 200 or 201
 - ✅ No authentication errors
-- ✅ Completion time < 1 minute
+- ✅ Completion time matches runtime tier target:
+  - `chain_depth 0-2`: ~60s (+ runner overhead)
+  - `chain_depth 3-7`: ~90s (+ runner overhead)
+  - `chain_depth >=8`: ~120s (+ runner overhead)
+
+#### Runtime tier spot checks:
+
+Run additional manual dispatch tests to validate case-by-case runtime enforcement:
+1. `chain_depth=0` -> expect ~60s
+2. `chain_depth=4` -> expect ~90s
+3. `chain_depth=9` -> expect ~120s
+4. `chain_depth=24` -> expect no further chaining, runtime still ~120s
 
 #### Test Cache Refresh:
 
@@ -258,15 +270,15 @@ Use this checklist to track verification progress:
 
 After 48 hours of operation, you should see:
 
-| Metric                           | Expected Value |
-| -------------------------------- | -------------- |
-| Operation Queue Drain runs/day   | ~288           |
-| Cache Refresh runs/day           | ~144           |
-| Success rate                     | >95%           |
-| Average execution time (drain)   | <60 seconds    |
-| Average execution time (refresh) | <90 seconds    |
-| Authentication failures          | 0              |
-| Connection timeouts              | <1%            |
+| Metric | Expected Value |
+|--------|----------------|
+| Operation Queue Drain runs/day | ~288 |
+| Cache Refresh runs/day | ~144 |
+| Success rate | >95% |
+| Average execution time (drain) | 60-120 seconds (tier-dependent) |
+| Average execution time (refresh) | <90 seconds |
+| Authentication failures | 0 |
+| Connection timeouts | <1% |
 
 ## Next Steps After Verification
 
