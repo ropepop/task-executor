@@ -63,6 +63,7 @@ Set the environment variable according to your platform's documentation.
 5. Check logs for success/failure
 
 Repeat for **Cache Refresh** workflow.
+Repeat for **Drain Fallback Dispatch** workflow.
 
 ## Maintenance
 
@@ -111,6 +112,10 @@ Additional behavior:
 - If chaining was required by guard conditions but workflow self-dispatch fails (non-2xx), the job fails
 - No extra repository secrets are required; chaining uses the workflow `GITHUB_TOKEN`
 - Drain requests include trace headers for observability: `X-Cron-Source`, `X-Cron-Run-Id`, `X-Cron-Event`, `X-Cron-Chain-Depth`
+
+### Fallback Dispatch Guard
+
+The fallback workflow calls `/api/internal/task-executor/fallback/dispatch-drain` every 10 minutes. The endpoint checks recent workflow history and only dispatches `stalled-runner-cron.yml` when no successful drain run occurred in the last 15 minutes.
 
 ## Troubleshooting
 

@@ -40,6 +40,14 @@ This repository contains GitHub Actions workflows that trigger scheduled mainten
 - Updates Supabase cache tables
 - Ensures read models stay synchronized with source data
 
+### 3. Drain Fallback Dispatch
+
+**Schedule**: Every 10 minutes (at 1, 11, 21, 31, 41, 51 minutes past the hour)
+
+**Purpose**: Calls the app fallback endpoint that conditionally dispatches a drain worker if no recent successful drain run exists.
+
+**Endpoint**: `POST /api/internal/task-executor/fallback/dispatch-drain`
+
 ## Setup Instructions
 
 ### Required Secrets
