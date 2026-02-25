@@ -60,6 +60,11 @@ Set the environment variable according to your platform's documentation.
    - Optional inputs:
      - `chain_depth` (default `0`)
      - `chain_origin` (default `manual`)
+     - `run_budget_minutes` (default `100`)
+     - `max_request_timeout_sec` (default `1800`)
+     - `max_iterations` (default `60`)
+     - `min_iterations_before_chain` (default `2`)
+     - `disable_padding` (deprecated, ignored)
 4. Wait for execution to complete
 5. Check logs for success/failure
 
@@ -99,33 +104,35 @@ Use [crontab.guru](https://crontab.guru) to validate cron expressions.
 
 ### Operation Queue Drain Backlog Chaining
 
-The drain workflow can queue a follow-up worker (`workflow_dispatch`) to improve continuity when backlog exists.
+The drain workflow runs an adaptive loop and can queue a follow-up worker (`workflow_dispatch`) when backlog remains and run budget is exhausted.
 
 Guard conditions:
 - Chain only if `after.pendingCount + after.dispatchedCount > 0`
 - Chain only if progress exists:
-  - Prefer `progressHint` from drain response when present
-  - Fallback to delta-based signals: `processedEstimate > 0`, backlog decrease, stalled-total decrease, or never-dispatched decrease
-- Chain only if current `chain_depth < 24`
-- Runtime tier is derived from `chain_depth`:
-  - `0-2`: `normal` (`X-Cron-Target-Runtime-Sec: 60`)
-  - `3-7`: `heavy` (`X-Cron-Target-Runtime-Sec: 90`)
-  - `>=8`: `severe` (`X-Cron-Target-Runtime-Sec: 120`)
+  - Preferred signals: `succeededCount > 0` or backlog decrease when not rate-limit-only
+  - Stop on `rate_limited_only_no_success` and `no_progress`
+- Chain only if current `chain_depth < 500`
+- Max one self-dispatch per run
 
 Additional behavior:
+- In-run loop can execute multiple iterations within one workflow run
 - Follow-up runs use `chain_origin=auto-backlog` and increment `chain_depth`
 - If chaining was required by guard conditions but workflow self-dispatch fails (non-2xx), the job fails
 - No extra repository secrets are required; chaining uses the workflow `GITHUB_TOKEN`
 - Drain requests include trace/runtime headers for observability: `X-Cron-Source`, `X-Cron-Run-Id`, `X-Cron-Event`, `X-Cron-Chain-Depth`, `X-Cron-Runtime-Tier`, `X-Cron-Target-Runtime-Sec`
-- Successful drain runs are padded in-workflow to the target wall-clock runtime (`60/90/120s`) so runtime targets are enforced even if the API returns early
-- Step summary/runtime logs include: `Runtime request`, `Runtime applied`, and `Runtime wall-clock (elapsedBeforePadSec, paddingSec, elapsedTotalSec)`
+- Step summary includes: `decision_code`, `decision_reason`, `iteration_count`, `run_budget_sec`, `remaining_budget_sec`, `chain_action`
 
 Implementation note:
-- Workflow-side padding is intentional until backend runtime-budget support is fully rolled out everywhere. Failures still exit immediately (no padding).
+- Workflow-side runtime padding has been removed in favor of adaptive looping + continuation.
 
 ### Fallback Dispatch Guard
 
-The fallback workflow calls `/api/internal/task-executor/fallback/dispatch-drain` every 10 minutes. The endpoint checks recent workflow history and only dispatches `stalled-runner-cron.yml` when no successful drain run occurred in the last 15 minutes.
+The fallback workflow calls `/api/internal/task-executor/fallback/dispatch-drain` every 10 minutes, but first applies local preflight guards:
+
+- Skip if any drain run is currently `in_progress` or `pending`
+- Skip if the latest completed drain run finished within the last 6 minutes (regardless of conclusion)
+
+Only when preflight passes does the workflow call the fallback endpoint.
 
 ## Troubleshooting
 
@@ -190,8 +197,9 @@ To enable more verbose logging, temporarily add a debug step to workflows:
 
 Current timeouts are configured for safety:
 
-- Workflow timeout: 15 minutes
-- Drain request (`curl --max-time`): 180 seconds
+- Drain workflow timeout: 120 minutes
+- Other workflow timeouts: 15 minutes
+- Drain request timeout: adaptive per iteration (bounded by `max_request_timeout_sec`, default 1800s)
 - Drain self-dispatch request (`curl --max-time`): 60 seconds
 - Refresh request (`curl --max-time`): 120 seconds
 

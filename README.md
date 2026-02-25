@@ -19,14 +19,15 @@ This repository contains GitHub Actions workflows that trigger scheduled mainten
 **What it does**:
 
 - Identifies operations that have been stalled for >45 seconds
-- Uses adaptive runtime tiers (`normal=60s`, `heavy=90s`, `severe=120s`) based on `chain_depth`
-- Enforces per-tier wall-clock runtime in the workflow by padding successful runs to target duration when the API returns early
-- Uses per-tier processing/scan caps (`normal=400/7500`, `heavy=600/10000`, `severe=800/12500`, legacy fallback `200/5000`)
+- Uses an adaptive in-run loop so one workflow run can process multiple drain iterations
+- Uses adaptive request timeout windows (bounded by remaining run budget)
+- Keeps continuation via guarded self-dispatch when productive work remains and run budget is exhausted
 - Returns before/after snapshots of the queue state
 - Sends trace/runtime headers (`X-Cron-Source`, `X-Cron-Run-Id`, `X-Cron-Event`, `X-Cron-Chain-Depth`, `X-Cron-Runtime-Tier`, `X-Cron-Target-Runtime-Sec`) with each drain request
-- Uses `progressHint` when returned by the API, with fallback progress signals from response deltas (`processedEstimate`, backlog, stalled, never-dispatched)
-- Guardedly self-dispatches a follow-up drain worker when backlog remains and progress was made
-- Stops self-dispatch when backlog is empty, no progress is made, or chain depth reaches 24
+- Uses `succeededCount`, backlog deltas, `progressHint`, and `rateLimitedCount`/`rateLimitOnly` signals for decisions
+- Stops self-dispatch on no-progress or rate-limited-only iterations to avoid chain storms
+- Supports optional same-run retry when `retryAfterSec` is present and safe within budget
+- Never dispatches more than one follow-up worker per run
 - Uses workflow concurrency locking so overlapping drain workers on the same ref do not run in parallel
 
 ### 2. Cache Refresh
@@ -50,6 +51,12 @@ This repository contains GitHub Actions workflows that trigger scheduled mainten
 **Purpose**: Calls the app fallback endpoint that conditionally dispatches a drain worker if no recent successful drain run exists.
 
 **Endpoint**: `POST /api/internal/task-executor/fallback/dispatch-drain`
+
+**What it does**:
+
+- Applies local preflight guards before calling the endpoint
+- Skips fallback dispatch when drain workers are already active/pending
+- Skips fallback dispatch when a drain run completed within the last 6 minutes
 
 ## Setup Instructions
 
@@ -90,6 +97,11 @@ Both workflows support manual triggering for testing:
 For **Operation Queue Drain**, optional manual `workflow_dispatch` inputs are available:
 - `chain_depth` (default: `0`)
 - `chain_origin` (default: `manual`)
+- `run_budget_minutes` (default: `100`)
+- `max_request_timeout_sec` (default: `1800`)
+- `max_iterations` (default: `60`)
+- `min_iterations_before_chain` (default: `2`)
+- `disable_padding` (deprecated, accepted for compatibility, ignored)
 
 These inputs are primarily for continuity testing/debugging; normal manual runs can use defaults.
 
@@ -116,7 +128,7 @@ All sensitive code stays in the private App repository:
 
 1. **Bearer Token Authentication**: All cron endpoints require a valid `CRON_SECRET` in the `Authorization` header
 2. **Secret Masking**: GitHub Actions automatically masks secrets in logs
-3. **Timeout Protection**: Each workflow has a 15-minute timeout to prevent runaway executions
+3. **Timeout Protection**: Drain workflow has a 120-minute max run duration with internal budget controls; other workflows keep 15-minute limits
 4. **HTTP Validation**: Endpoints validate request methods and reject unauthorized access
 
 ## Monitoring

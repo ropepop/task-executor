@@ -14,9 +14,25 @@ on:
         required: false
         default: manual
       disable_padding:
-        description: Disable runtime padding sleep for manual recovery runs
+        description: Deprecated compatibility input (ignored by adaptive runner)
         required: false
         default: 'false'
+      run_budget_minutes:
+        description: In-run budget before continuation dispatch
+        required: false
+        default: '100'
+      max_request_timeout_sec:
+        description: Max per-request timeout cap (seconds)
+        required: false
+        default: '1800'
+      max_iterations:
+        description: Max drain iterations in this workflow run
+        required: false
+        default: '60'
+      min_iterations_before_chain:
+        description: Minimum iterations before chaining unless backlog is very high
+        required: false
+        default: '2'
 
 permissions:
   actions: write
@@ -29,8 +45,18 @@ concurrency:
 jobs:
   drain:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 120
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Report workflow revision
+        run: |
+          set -euo pipefail
+          echo "Workflow commit SHA: ${GITHUB_SHA}"
+          echo "Checked out commit SHA: $(git rev-parse HEAD)"
+          echo "Drain runner path: scripts/drain_runner.sh"
+
       - name: Validate required secrets
         env:
           STALLED_RUNNER_BASE_URL: ${{ secrets.STALLED_RUNNER_BASE_URL }}
@@ -51,304 +77,20 @@ jobs:
           STALLED_RUNNER_BASE_URL: ${{ secrets.STALLED_RUNNER_BASE_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
           CHAIN_DEPTH_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.chain_depth || '0' }}
           CHAIN_ORIGIN_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.chain_origin || github.event_name }}
+          RUN_BUDGET_MINUTES_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.run_budget_minutes || '100' }}
+          MAX_REQUEST_TIMEOUT_SEC_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.max_request_timeout_sec || '1800' }}
+          MAX_ITERATIONS_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.max_iterations || '60' }}
+          MIN_ITERATIONS_BEFORE_CHAIN_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.min_iterations_before_chain || '2' }}
           DISABLE_PADDING_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.disable_padding || 'false' }}
         run: |
           set -euo pipefail
-
-          run_start_epoch="$(date +%s)"
-          drain_url="${STALLED_RUNNER_BASE_URL%/}/api/internal/pipeline/operations/actions/drain"
-          response_file="$(mktemp)"
-          chain_depth_raw="${CHAIN_DEPTH_INPUT:-0}"
-          if [[ "${chain_depth_raw}" =~ ^[0-9]+$ ]]; then
-            chain_depth="${chain_depth_raw}"
-          else
-            chain_depth=0
+          if [ "${DISABLE_PADDING_INPUT:-false}" != "false" ]; then
+            echo "Note: disable_padding is deprecated and ignored by adaptive drain runner"
           fi
-          chain_origin="${CHAIN_ORIGIN_INPUT:-manual}"
-          disable_padding_input_raw="$(echo "${DISABLE_PADDING_INPUT:-false}" | tr '[:upper:]' '[:lower:]')"
-          disable_padding=false
-          if [ "${disable_padding_input_raw}" = "true" ] || [ "${disable_padding_input_raw}" = "1" ] || [ "${disable_padding_input_raw}" = "yes" ]; then
-            disable_padding=true
-          fi
-          runtime_tier="normal"
-          target_runtime_sec=60
-          if [ "${chain_depth}" -ge 8 ]; then
-            runtime_tier="severe"
-            target_runtime_sec=120
-          elif [ "${chain_depth}" -ge 3 ]; then
-            runtime_tier="heavy"
-            target_runtime_sec=90
-          fi
-
-          status_code="$(
-            curl \
-              --silent \
-              --show-error \
-              --connect-timeout 10 \
-              --max-time 180 \
-              --output "${response_file}" \
-              --write-out '%{http_code}' \
-              --request POST \
-              --header "Authorization: Bearer ${CRON_SECRET}" \
-              --header "Content-Type: application/json" \
-              --header "X-Cron-Source: task-executor" \
-              --header "X-Cron-Run-Id: ${GITHUB_RUN_ID}" \
-              --header "X-Cron-Event: ${GITHUB_EVENT_NAME}" \
-              --header "X-Cron-Chain-Depth: ${chain_depth}" \
-              --header "X-Cron-Runtime-Tier: ${runtime_tier}" \
-              --header "X-Cron-Target-Runtime-Sec: ${target_runtime_sec}" \
-              "${drain_url}"
-          )"
-
-          echo "Drain status: ${status_code}"
-          cat "${response_file}"
-
-          if [ "${status_code}" -lt 200 ] || [ "${status_code}" -ge 300 ]; then
-            echo "Operation queue drain failed"
-            exit 1
-          fi
-
-          before_pending="$(jq -r '(.data.before.pendingCount // .before.pendingCount // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
-          before_dispatched="$(jq -r '(.data.before.dispatchedCount // .before.dispatchedCount // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
-          before_stalled_total="$(jq -r '(.data.before.stalledTotal // .before.stalledTotal // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
-          before_never_dispatched="$(jq -r '(.data.before.neverDispatchedCount // .before.neverDispatchedCount // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
-          after_pending="$(jq -r '(.data.after.pendingCount // .after.pendingCount // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
-          after_dispatched="$(jq -r '(.data.after.dispatchedCount // .after.dispatchedCount // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
-          after_stalled_total="$(jq -r '(.data.after.stalledTotal // .after.stalledTotal // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
-          after_never_dispatched="$(jq -r '(.data.after.neverDispatchedCount // .after.neverDispatchedCount // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
-          processed_estimate="$(jq -r '(.data.processedEstimate // .processedEstimate // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
-          attempted_count="$(jq -r '(.data.attemptedCount // .attemptedCount // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
-          succeeded_count="$(jq -r '(.data.succeededCount // .succeededCount // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
-          failed_count="$(jq -r '(.data.failedCount // .failedCount // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
-          rate_limited_count="$(jq -r '(.data.rateLimitedCount // .rateLimitedCount // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
-          progress_hint="$(
-            jq -r '
-              if ((.data | type) == "object" and (.data | has("progressHint"))) then
-                if .data.progressHint == true then "true"
-                elif .data.progressHint == false then "false"
-                else "unset" end
-              elif has("progressHint") then
-                if .progressHint == true then "true"
-                elif .progressHint == false then "false"
-                else "unset" end
-              else
-                "unset"
-              end
-            ' "${response_file}" 2>/dev/null || echo unset
-          )"
-          rate_limit_only="$(
-            jq -r '
-              if ((.data | type) == "object" and (.data | has("rateLimitOnly"))) then
-                if .data.rateLimitOnly == true then "true"
-                elif .data.rateLimitOnly == false then "false"
-                else "unset" end
-              elif has("rateLimitOnly") then
-                if .rateLimitOnly == true then "true"
-                elif .rateLimitOnly == false then "false"
-                else "unset" end
-              else
-                "unset"
-              end
-            ' "${response_file}" 2>/dev/null || echo unset
-          )"
-          retry_after_sec="$(jq -r '(.data.retryAfterSec // .retryAfterSec // "null")' "${response_file}" 2>/dev/null || echo null)"
-          if [ "${rate_limit_only}" = "unset" ]; then
-            if [ "${succeeded_count}" -eq 0 ] && [ "${rate_limited_count}" -gt 0 ]; then
-              rate_limit_only=true
-            else
-              rate_limit_only=false
-            fi
-          fi
-          runtime_budget_sec="$(
-            jq -r '
-              if ((.data | type) == "object" and (.data | has("runtimeBudgetSec"))) then
-                (.data.runtimeBudgetSec | tonumber? // 20)
-              elif has("runtimeBudgetSec") then
-                (.runtimeBudgetSec | tonumber? // 20)
-              elif ((.data | type) == "object" and (.data | has("timeBudgetMs"))) then
-                ((.data.timeBudgetMs | tonumber? // 0) / 1000 | floor)
-              elif has("timeBudgetMs") then
-                ((.timeBudgetMs | tonumber? // 0) / 1000 | floor)
-              else
-                20
-              end
-            ' "${response_file}" 2>/dev/null || echo 20
-          )"
-          runtime_used_ms="$(jq -r '(.data.runtimeUsedMs // .runtimeUsedMs // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
-          runtime_tier_reported="$(jq -r '(.data.runtimeTier // .runtimeTier // "unknown")' "${response_file}" 2>/dev/null || echo unknown)"
-
-          before_backlog=$((before_pending + before_dispatched))
-          after_backlog=$((after_pending + after_dispatched))
-          max_chain_depth=24
-          should_chain=false
-          decision_reason=""
-          decision_code=""
-          progress_made=false
-          progress_signal="none"
-
-          if [ "${progress_hint}" = "true" ]; then
-            progress_made=true
-            progress_signal="progressHint=true"
-          elif [ "${progress_hint}" = "false" ]; then
-            progress_signal="progressHint=false"
-          elif [ "${processed_estimate}" -gt 0 ]; then
-            progress_made=true
-            progress_signal="processedEstimate>0"
-          elif [ "${before_backlog}" -gt "${after_backlog}" ]; then
-            progress_made=true
-            progress_signal="backlog_decreased"
-          elif [ "${before_stalled_total}" -gt "${after_stalled_total}" ]; then
-            progress_made=true
-            progress_signal="stalledTotal_decreased"
-          elif [ "${before_never_dispatched}" -gt "${after_never_dispatched}" ]; then
-            progress_made=true
-            progress_signal="neverDispatched_decreased"
-          fi
-
-          if [ "${after_backlog}" -le 0 ]; then
-            decision_reason="No backlog remains after drain"
-            decision_code="no_backlog_remaining"
-          elif [ "${chain_depth}" -ge "${max_chain_depth}" ]; then
-            decision_reason="Maximum chain depth reached (${chain_depth}/${max_chain_depth})"
-            decision_code="max_chain_depth_reached"
-          elif [ "${succeeded_count}" -eq 0 ] && [ "${rate_limited_count}" -gt 0 ]; then
-            decision_reason="rate_limited_only_no_success"
-            decision_code="rate_limited_only_no_success"
-          elif [ "${succeeded_count}" -gt 0 ]; then
-            should_chain=true
-            decision_reason="Backlog remains and successful work completed (${succeeded_count})"
-            decision_code="succeeded_count_positive"
-          elif [ "${before_backlog}" -gt "${after_backlog}" ] && [ "${rate_limit_only}" != "true" ]; then
-            should_chain=true
-            decision_reason="Backlog decreased and run is not rate-limit-only"
-            decision_code="backlog_decreased_non_rate_limit_only"
-          elif [ "${progress_made}" != "true" ]; then
-            decision_reason="Backlog remains but no progress signal (${progress_signal})"
-            decision_code="no_progress_signal"
-          else
-            decision_reason="Backlog remains but chaining contract not met"
-            decision_code="contract_not_met"
-          fi
-
-          run_before_pad_epoch="$(date +%s)"
-          elapsed_before_pad_sec=$((run_before_pad_epoch - run_start_epoch))
-          padding_sec=0
-          if [ "${disable_padding}" = "true" ]; then
-            echo "Runtime padding disabled by input (disable_padding=${disable_padding_input_raw})"
-          else
-            padding_sec=$((target_runtime_sec - elapsed_before_pad_sec))
-            if [ "${padding_sec}" -gt 0 ]; then
-              echo "Applying runtime padding: sleeping ${padding_sec}s to hit target ${target_runtime_sec}s"
-              sleep "${padding_sec}"
-            else
-              padding_sec=0
-              echo "No runtime padding needed (elapsed=${elapsed_before_pad_sec}s, target=${target_runtime_sec}s)"
-            fi
-          fi
-          run_end_epoch="$(date +%s)"
-          elapsed_total_sec=$((run_end_epoch - run_start_epoch))
-
-          echo "Backlog before: ${before_backlog} (pending=${before_pending}, dispatched=${before_dispatched})"
-          echo "Backlog after: ${after_backlog} (pending=${after_pending}, dispatched=${after_dispatched})"
-          echo "Stalled total before: ${before_stalled_total}"
-          echo "Stalled total after: ${after_stalled_total}"
-          echo "Never-dispatched before: ${before_never_dispatched}"
-          echo "Never-dispatched after: ${after_never_dispatched}"
-          echo "Processed estimate: ${processed_estimate}"
-          echo "Attempted count: ${attempted_count}"
-          echo "Succeeded count: ${succeeded_count}"
-          echo "Failed count: ${failed_count}"
-          echo "Rate-limited count: ${rate_limited_count}"
-          echo "Rate-limit-only: ${rate_limit_only}"
-          echo "Retry-after seconds: ${retry_after_sec}"
-          echo "Progress hint: ${progress_hint}"
-          echo "Progress signal: ${progress_signal}"
-          echo "Runtime request: tier=${runtime_tier}, targetSec=${target_runtime_sec}"
-          echo "Runtime applied: tier=${runtime_tier_reported}, budgetSec=${runtime_budget_sec}, usedMs=${runtime_used_ms}"
-          echo "Runtime padding disabled: ${disable_padding}"
-          echo "Runtime wall-clock: elapsedBeforePadSec=${elapsed_before_pad_sec}, paddingSec=${padding_sec}, elapsedTotalSec=${elapsed_total_sec}"
-          echo "Chain context: depth=${chain_depth}, origin=${chain_origin}"
-          echo "Chain decision: ${should_chain} (${decision_reason})"
-
-          {
-            echo "### Operation Queue Drain Summary"
-            echo ""
-            echo "- HTTP status: \`${status_code}\`"
-            echo "- Backlog before: \`${before_backlog}\` (pending=\`${before_pending}\`, dispatched=\`${before_dispatched}\`)"
-            echo "- Backlog after: \`${after_backlog}\` (pending=\`${after_pending}\`, dispatched=\`${after_dispatched}\`)"
-            echo "- Stalled total before: \`${before_stalled_total}\`"
-            echo "- Stalled total after: \`${after_stalled_total}\`"
-            echo "- Never-dispatched before: \`${before_never_dispatched}\`"
-            echo "- Never-dispatched after: \`${after_never_dispatched}\`"
-            echo "- Processed estimate: \`${processed_estimate}\`"
-            echo "- Attempted count: \`${attempted_count}\`"
-            echo "- Succeeded count: \`${succeeded_count}\`"
-            echo "- Failed count: \`${failed_count}\`"
-            echo "- Rate-limited count: \`${rate_limited_count}\`"
-            echo "- Rate-limit-only: \`${rate_limit_only}\`"
-            echo "- Retry-after seconds: \`${retry_after_sec}\`"
-            echo "- Progress hint: \`${progress_hint}\`"
-            echo "- Progress signal: \`${progress_signal}\`"
-            echo "- Runtime request: tier=\`${runtime_tier}\`, targetSec=\`${target_runtime_sec}\`"
-            echo "- Runtime applied: tier=\`${runtime_tier_reported}\`, budgetSec=\`${runtime_budget_sec}\`, usedMs=\`${runtime_used_ms}\`"
-            echo "- Runtime padding disabled: \`${disable_padding}\`"
-            echo "- Runtime wall-clock: elapsedBeforePadSec=\`${elapsed_before_pad_sec}\`, paddingSec=\`${padding_sec}\`, elapsedTotalSec=\`${elapsed_total_sec}\`"
-            echo "- Chain depth: \`${chain_depth}\` (max \`${max_chain_depth}\`)"
-            echo "- Chain origin: \`${chain_origin}\`"
-            echo "- Chain decision: \`${should_chain}\`"
-            echo "- Decision code: \`${decision_code}\`"
-            echo "- Decision reason: ${decision_reason}"
-          } >> "${GITHUB_STEP_SUMMARY}"
-
-          if [ "${should_chain}" != "true" ]; then
-            exit 0
-          fi
-
-          next_chain_depth=$((chain_depth + 1))
-          dispatch_url="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/stalled-runner-cron.yml/dispatches"
-          dispatch_response_file="$(mktemp)"
-          dispatch_payload="$(
-            jq -n \
-              --arg ref "${GITHUB_REF_NAME}" \
-              --arg chain_depth "${next_chain_depth}" \
-              --arg chain_origin "auto-backlog" \
-              '{ref:$ref, inputs:{chain_depth:$chain_depth, chain_origin:$chain_origin}}'
-          )"
-
-          dispatch_status="$(
-            curl \
-              --silent \
-              --show-error \
-              --connect-timeout 10 \
-              --max-time 60 \
-              --output "${dispatch_response_file}" \
-              --write-out '%{http_code}' \
-              --request POST \
-              --header "Accept: application/vnd.github+json" \
-              --header "Authorization: Bearer ${GITHUB_TOKEN}" \
-              --header "X-GitHub-Api-Version: 2022-11-28" \
-              --header "Content-Type: application/json" \
-              --data "${dispatch_payload}" \
-              "${dispatch_url}"
-          )"
-
-          echo "Self-dispatch status: ${dispatch_status}"
-          if [ -s "${dispatch_response_file}" ]; then
-            cat "${dispatch_response_file}"
-          fi
-
-          if [ "${dispatch_status}" -lt 200 ] || [ "${dispatch_status}" -ge 300 ]; then
-            {
-              echo "- Self-dispatch status: \`${dispatch_status}\`"
-              echo "- Self-dispatch result: failed"
-            } >> "${GITHUB_STEP_SUMMARY}"
-            echo "Self-dispatch failed"
-            exit 1
-          fi
-
-          {
-            echo "- Self-dispatch status: \`${dispatch_status}\`"
-            echo "- Self-dispatch result: queued next worker with \`chain_depth=${next_chain_depth}\`"
-          } >> "${GITHUB_STEP_SUMMARY}"
+          ./scripts/drain_runner.sh
