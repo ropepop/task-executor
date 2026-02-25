@@ -43,6 +43,17 @@ determine_runtime_tier() {
   fi
 }
 
+chain_origin_for_depth() {
+  local depth="$(safe_int "${1:-0}")"
+  case "${depth}" in
+    0) echo "firstrun" ;;
+    1) echo "secondrun" ;;
+    2) echo "thirdrun" ;;
+    3) echo "fourthrun" ;;
+    *) echo "followup-depth-${depth}" ;;
+  esac
+}
+
 effective_rate_limit_only() {
   local rate_limit_only_in="$(normalize_bool "${1:-false}")"
   local succeeded_count="$(safe_int "${2:-0}")"
@@ -251,7 +262,7 @@ main() {
   : "${GITHUB_EVENT_NAME:?Missing GITHUB_EVENT_NAME}"
 
   local chain_depth="$(safe_int "${CHAIN_DEPTH_INPUT:-0}")"
-  local chain_origin="${CHAIN_ORIGIN_INPUT:-manual}"
+  local chain_origin="${CHAIN_ORIGIN_INPUT:-$(chain_origin_for_depth "${chain_depth}")}"
   local run_budget_minutes="$(safe_int "${RUN_BUDGET_MINUTES_INPUT:-100}")"
   local max_request_timeout_sec="$(safe_int "${MAX_REQUEST_TIMEOUT_SEC_INPUT:-1800}")"
   local max_iterations="$(safe_int "${MAX_ITERATIONS_INPUT:-60}")"
@@ -267,6 +278,7 @@ main() {
   local target_request_timeout_sec=900
   local dispatch_buffer_sec=90
   local max_chain_depth=500
+  local max_dispatch_depth=3
   local high_backlog_chain_threshold=300
 
   if [ "${run_budget_sec}" -lt 600 ]; then
@@ -554,6 +566,14 @@ main() {
     should_dispatch="false"
     chain_action="none"
   fi
+  if [ "${chain_depth}" -ge "${max_dispatch_depth}" ]; then
+    should_dispatch="false"
+    chain_action="none"
+    if [ "${decision_code}" = "item_succeeded_continue" ] || [ "${decision_code}" = "run_budget_exhausted_with_progress" ] || [ "${decision_code}" = "max_iterations_reached_with_progress" ]; then
+      decision_code="dispatch_depth_cap_reached"
+      decision_reason="Dispatch depth cap reached; fourthrun is terminal for follow-up queueing"
+    fi
+  fi
   if [ "${last_transition_was_success}" != "true" ]; then
     should_dispatch="false"
     chain_action="none"
@@ -585,6 +605,7 @@ main() {
   echo "Rate-limit retries used: ${rate_limit_retry_count}"
   echo "Backoff config: base=${backoff_base_sec}s cap=${backoff_cap_sec}s jitterPct=${backoff_jitter_pct} maxRetries=${backoff_max_retries}"
   echo "Chain context: depth=${chain_depth}, origin=${chain_origin}"
+  echo "Chain dispatch depth cap: ${max_dispatch_depth} (firstrun->secondrun->thirdrun->fourthrun)"
   echo "Chain guard: minIterationsBeforeChain=${min_iterations_before_chain}, highBacklogThreshold=${high_backlog_chain_threshold}"
   echo "Decision code: ${decision_code}"
   echo "Decision reason: ${decision_reason}"
@@ -608,6 +629,7 @@ main() {
   emit_summary "- Backoff config: base=\`${backoff_base_sec}\` cap=\`${backoff_cap_sec}\` jitterPct=\`${backoff_jitter_pct}\` maxRetries=\`${backoff_max_retries}\`"
   emit_summary "- Chain depth: \`${chain_depth}\` (max \`${max_chain_depth}\`)"
   emit_summary "- Chain origin: \`${chain_origin}\`"
+  emit_summary "- Chain dispatch depth cap: \`${max_dispatch_depth}\` (fourthrun is terminal)"
   emit_summary "- Chain guard min iterations: \`${min_iterations_before_chain}\`"
   emit_summary "- Chain guard high backlog threshold: \`${high_backlog_chain_threshold}\`"
   emit_summary "- Decision code: \`${decision_code}\`"
@@ -623,6 +645,8 @@ main() {
 
   local next_chain_depth
   next_chain_depth=$((chain_depth + 1))
+  local next_chain_origin
+  next_chain_origin="$(chain_origin_for_depth "${next_chain_depth}")"
 
   local dispatch_url dispatch_response_file dispatch_payload dispatch_status
   dispatch_url="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/stalled-runner-cron.yml/dispatches"
@@ -631,7 +655,7 @@ main() {
     jq -n \
       --arg ref "${GITHUB_REF_NAME}" \
       --arg chain_depth "${next_chain_depth}" \
-      --arg chain_origin "auto-backlog" \
+      --arg chain_origin "${next_chain_origin}" \
       --arg run_budget_minutes "${run_budget_minutes}" \
       --arg max_request_timeout_sec "${max_request_timeout_sec}" \
       --arg max_iterations "${max_iterations}" \
@@ -687,7 +711,7 @@ main() {
   fi
 
   emit_summary "- Self-dispatch status: \`${dispatch_status}\`"
-  emit_summary "- Self-dispatch result: queued next worker with \`chain_depth=${next_chain_depth}\`"
+  emit_summary "- Self-dispatch result: queued next worker with \`chain_depth=${next_chain_depth}\`, \`chain_origin=${next_chain_origin}\`"
   return "${exit_code}"
 }
 

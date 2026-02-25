@@ -68,16 +68,15 @@ This guide helps you verify that the cron jobs are functioning correctly in the 
 - ✅ No authentication errors
 - ✅ Completion time matches runtime tier target:
   - `chain_depth 0-2`: ~60s (+ runner overhead)
-  - `chain_depth 3-7`: ~90s (+ runner overhead)
-  - `chain_depth >=8`: ~120s (+ runner overhead)
+  - `chain_depth 3`: ~90s (+ runner overhead)
 
 #### Runtime tier spot checks:
 
 Run additional manual dispatch tests to validate case-by-case runtime enforcement:
 1. `chain_depth=0` -> expect ~60s
-2. `chain_depth=4` -> expect ~90s
-3. `chain_depth=9` -> expect ~120s
-4. `chain_depth=24` -> expect no further chaining, runtime still ~120s
+2. `chain_depth=1` -> expect ~60s
+3. `chain_depth=2` -> expect ~60s
+4. `chain_depth=3` -> expect ~90s and no further queueing (terminal `fourthrun`)
 
 #### Test Cache Refresh:
 

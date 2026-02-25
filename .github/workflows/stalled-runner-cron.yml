@@ -6,13 +6,13 @@ on:
   workflow_dispatch:
     inputs:
       chain_depth:
-        description: Current backlog chain depth (0 for scheduled/manual runs)
+        description: Current backlog chain depth (0=firstrun, 1=secondrun, 2=thirdrun, 3=fourthrun)
         required: false
         default: '0'
       chain_origin:
-        description: Origin marker for run continuity telemetry
+        description: Chain run label for telemetry (firstrun/secondrun/thirdrun/fourthrun)
         required: false
-        default: manual
+        default: firstrun
       run_budget_minutes:
         description: In-run budget before continuation dispatch
         required: false
@@ -94,7 +94,7 @@ jobs:
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           CHAIN_DEPTH_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.chain_depth || '0' }}
-          CHAIN_ORIGIN_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.chain_origin || github.event_name }}
+          CHAIN_ORIGIN_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.chain_origin || 'firstrun' }}
           RUN_BUDGET_MINUTES_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.run_budget_minutes || '100' }}
           MAX_REQUEST_TIMEOUT_SEC_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.max_request_timeout_sec || '1800' }}
           MAX_ITERATIONS_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.max_iterations || '60' }}

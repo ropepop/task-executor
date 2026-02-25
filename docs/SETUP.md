@@ -59,7 +59,7 @@ Set the environment variable according to your platform's documentation.
 3. Click **Run workflow**
    - Optional inputs:
      - `chain_depth` (default `0`)
-     - `chain_origin` (default `manual`)
+     - `chain_origin` (default `firstrun`)
      - `run_budget_minutes` (default `100`)
      - `max_request_timeout_sec` (default `1800`)
      - `max_iterations` (default `60`)
@@ -111,8 +111,13 @@ The drain workflow runs a strict single-item loop and can queue a follow-up work
 Guard conditions:
 - Chain only if `after.pendingCount + after.dispatchedCount > 0`
 - Chain only if last transition succeeded (`succeededCount == 1`)
-- Chain only if current `chain_depth < 500`
+- Chain only if current `chain_depth < 3` (dispatch cap)
 - Max one self-dispatch per run
+- Chain dispatch depth cap is `3`, mapping to:
+  - `0=firstrun`
+  - `1=secondrun`
+  - `2=thirdrun`
+  - `3=fourthrun` (terminal, no further queueing)
 
 Strict-mode behavior:
 - Enforces `attemptedCount <= 1` and `succeededCount <= 1` on every iteration
@@ -125,7 +130,7 @@ Strict-mode behavior:
 - Stops gracefully on `rate_limit_retry_cap_reached` or `rate_limit_budget_exhausted` without dispatch
 
 Additional behavior:
-- Follow-up runs use `chain_origin=auto-backlog` and increment `chain_depth`
+- Follow-up runs increment `chain_depth` and set `chain_origin` by depth (`secondrun`, `thirdrun`, `fourthrun`)
 - If chaining was required by guard conditions but workflow self-dispatch fails (non-2xx), the job fails
 - No extra repository secrets are required; chaining uses the workflow `GITHUB_TOKEN`
 - Drain requests include trace/runtime headers and strict-mode hints:

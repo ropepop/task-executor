@@ -30,6 +30,7 @@ This repository contains GitHub Actions workflows that trigger scheduled mainten
 - When provided, uses `sleep = max(retryAfterSec, computedBackoff)`
 - Stops gracefully on `rate_limit_retry_cap_reached` or `rate_limit_budget_exhausted` (no chain storming)
 - Never dispatches more than one follow-up worker per run
+- Dispatch continuation order is fixed: `firstrun -> secondrun -> thirdrun -> fourthrun` (terminal)
 - Uses workflow concurrency locking so overlapping drain workers on the same ref do not run in parallel
 
 ### 2. Cache Refresh
@@ -84,7 +85,7 @@ Workflows support manual triggering for testing:
 
 For **Operation Queue Drain**, optional manual `workflow_dispatch` inputs are available:
 - `chain_depth` (default: `0`)
-- `chain_origin` (default: `manual`)
+- `chain_origin` (default: `firstrun`)
 - `run_budget_minutes` (default: `100`)
 - `max_request_timeout_sec` (default: `1800`)
 - `max_iterations` (default: `60`)
