@@ -9,12 +9,13 @@ Get your cron jobs running in 5 minutes!
 3. Click **New repository secret**
 4. Add these two secrets:
 
-| Name | Value |
-|------|-------|
-| `STALLED_RUNNER_BASE_URL` | Your app URL (e.g., `https://notiolink.com`) |
-| `CRON_SECRET` | Random token (see below) |
+| Name                      | Value                                          |
+| ------------------------- | ---------------------------------------------- |
+| `STALLED_RUNNER_BASE_URL` | Your app URL (e.g., `https://app.example.com`) |
+| `CRON_SECRET`             | Random token (see below)                       |
 
 **Generate CRON_SECRET:**
+
 ```bash
 # Run this command and copy the output
 openssl rand -hex 32
@@ -22,9 +23,10 @@ openssl rand -hex 32
 
 ## Step 2: Verify Deployment (1 minute)
 
-Make sure your Notiolink deployment has the same `CRON_SECRET` environment variable configured.
+Make sure your App deployment has the same `CRON_SECRET` environment variable configured.
 
 **Vercel:**
+
 ```bash
 vercel env add CRON_SECRET
 # Paste the same token you added to GitHub
@@ -43,6 +45,7 @@ Repeat for **Cache Refresh** workflow.
 ## Done! ✅
 
 Your cron jobs will now run automatically:
+
 - **Operation Queue Drain**: Every 5 minutes
 - **Cache Refresh**: Every 10 minutes
 
@@ -56,10 +59,12 @@ Your cron jobs will now run automatically:
 ## Troubleshooting
 
 **Workflow failed?**
+
 - Check that both secrets are configured correctly
 - Verify your deployment is accessible
 - Check workflow logs for specific error messages
 
 **Need help?**
+
 - See [docs/SETUP.md](docs/SETUP.md) for detailed troubleshooting
 - Review [docs/SECURITY.md](docs/SECURITY.md) for security checklist

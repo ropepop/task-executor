@@ -5,6 +5,7 @@ This document outlines security practices for the cron jobs repository.
 ## What This Repository Contains
 
 ✅ **Public (Safe to Share)**
+
 - GitHub Actions workflow YAML files
 - Setup documentation
 - Architecture diagrams
@@ -13,6 +14,7 @@ This document outlines security practices for the cron jobs repository.
 ## What Remains Private
 
 🔒 **Private (Never Commit)**
+
 - API endpoint implementations
 - Database connection strings
 - Business logic code
@@ -28,9 +30,10 @@ This document outlines security practices for the cron jobs repository.
 The following secrets are required and must be configured in GitHub:
 
 1. **`STALLED_RUNNER_BASE_URL`**
+
    - Type: String (URL)
-   - Purpose: Base URL of the Notiolink deployment
-   - Example: `https://notiolink.com`
+   - Purpose: Base URL of the App deployment
+   - Example: `https://app.example.com`
    - Sensitivity: Low (public-facing URL)
 
 2. **`CRON_SECRET`**
@@ -42,16 +45,19 @@ The following secrets are required and must be configured in GitHub:
 ### Secret Security Best Practices
 
 1. **Never commit secrets to Git**
+
    - This repository has no `.env` files
    - No secrets in workflow YAML files
    - GitHub Actions injects secrets at runtime
 
 2. **Use strong secrets**
+
    - CRON_SECRET should be at least 64 characters
    - Use cryptographically secure random generation
    - Avoid predictable patterns
 
 3. **Rotate secrets regularly**
+
    - Recommended: Every 90 days
    - Immediately if compromise is suspected
    - Update both GitHub and deployment simultaneously
@@ -76,7 +82,7 @@ The following secrets are required and must be configured in GitHub:
          │ Authorization: Bearer <CRON_SECRET>
          ▼
 ┌─────────────────┐
-│  Notiolink API  │
+│  App API        │
 │                 │
 │ 4. Validate     │
 │ 5. Process      │
@@ -87,6 +93,7 @@ The following secrets are required and must be configured in GitHub:
 ### Request Validation
 
 All cron endpoints must validate:
+
 - ✅ Request method is POST
 - ✅ Authorization header is present
 - ✅ Bearer token matches CRON_SECRET
@@ -97,6 +104,7 @@ All cron endpoints must validate:
 ### HTTPS Only
 
 All endpoints must use HTTPS:
+
 - Encrypts data in transit
 - Prevents man-in-the-middle attacks
 - Validates server identity
@@ -114,6 +122,7 @@ For enhanced security, configure your deployment to accept cron requests only fr
 ### What Gets Logged
 
 GitHub Actions logs:
+
 - ✅ Workflow execution start/end
 - ✅ HTTP status codes
 - ✅ Response body content (non-sensitive)
@@ -122,10 +131,12 @@ GitHub Actions logs:
 ### What to Monitor
 
 1. **Failed authentications**
+
    - Check deployment logs for 401 errors
    - May indicate secret mismatch or attack attempt
 
 2. **Unusual execution patterns**
+
    - Unexpected workflow triggers
    - Execution outside scheduled times
    - Multiple concurrent runs
@@ -140,19 +151,23 @@ GitHub Actions logs:
 ### If CRON_SECRET is Compromised
 
 1. **Generate new secret immediately**
+
    ```bash
    openssl rand -hex 32
    ```
 
 2. **Update GitHub secret**
+
    - Go to Settings → Secrets and variables → Actions
    - Update CRON_SECRET value
 
 3. **Update deployment**
+
    - Update environment variable in hosting platform
    - Restart deployment if necessary
 
 4. **Verify both workflows**
+
    - Manually trigger both workflows
    - Confirm successful execution
 

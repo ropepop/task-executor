@@ -1,10 +1,10 @@
-# Notiolink Cron Jobs
+# App Cron Jobs
 
-Public repository for Notiolink's scheduled cron jobs.
+Public repository for App's scheduled cron jobs, designed to utilize GitHub Actions free minutes.
 
 ## Overview
 
-This repository contains GitHub Actions workflows that trigger scheduled maintenance tasks for the Notiolink application. All business logic, API endpoints, and sensitive operations remain in the private Notiolink repository.
+This repository contains GitHub Actions workflows that trigger scheduled maintenance tasks for the App application. All business logic, API endpoints, and sensitive operations remain in the private App repository.
 
 ## Cron Jobs
 
@@ -17,6 +17,7 @@ This repository contains GitHub Actions workflows that trigger scheduled mainten
 **Endpoint**: `POST /api/internal/pipeline/operations/actions/drain`
 
 **What it does**:
+
 - Identifies operations that have been stalled for >45 seconds
 - Processes up to 200 operations per run
 - Scans up to 5000 operations within a 20-second time budget
@@ -36,6 +37,7 @@ This repository contains GitHub Actions workflows that trigger scheduled mainten
 **Endpoint**: `POST /api/internal/cache/refresh`
 
 **What it does**:
+
 - Fetches latest link and tree data from Notion
 - Updates Supabase cache tables
 - Ensures read models stay synchronized with source data
@@ -55,7 +57,8 @@ This repository contains GitHub Actions workflows that trigger scheduled mainten
 Configure the following secrets in your GitHub repository settings:
 
 1. **`STALLED_RUNNER_BASE_URL`** (Required)
-   - The base URL of your Notiolink deployment
+
+   - The base URL of your App deployment
    - Example: `https://your-domain.com`
    - Used to construct the full endpoint URLs for cron jobs
 
@@ -99,7 +102,8 @@ These inputs are primarily for continuity testing/debugging; normal manual runs 
 
 ### What Remains Private
 
-All sensitive code stays in the private Notiolink repository:
+All sensitive code stays in the private App repository:
+
 - ✅ API endpoint implementations
 - ✅ Database operations and schema
 - ✅ Business logic and algorithms
@@ -131,14 +135,17 @@ All sensitive code stays in the private Notiolink repository:
 ### Troubleshooting
 
 **Workflow fails with "Missing required GitHub secret"**
+
 - Verify secrets are configured in repository settings
 - Ensure secret names match exactly (case-sensitive)
 
 **Endpoint returns 401 Unauthorized**
+
 - Verify `CRON_SECRET` matches between GitHub and your deployment
 - Check that the secret is properly formatted (no extra whitespace)
 
 **Endpoint returns 5xx errors**
+
 - Check your deployment logs for application errors
 - Verify your deployment is healthy and accessible
 - Ensure the `STALLED_RUNNER_BASE_URL` is correct
@@ -146,14 +153,14 @@ All sensitive code stays in the private Notiolink repository:
 ## Architecture
 
 ```
-┌─────────────────────┐      ┌──────────────────────┐      ┌─────────────────┐
-│  GitHub Actions     │      │  Notiolink           │      │  Notion API     │
-│  (Public Repo)      │─────▶│  Deployment          │─────▶│                 │
-│                     │      │  (Private)           │      │                 │
-│  - Cron Schedule    │      │                      │      │                 │
-│  - HTTP Request     │      │  - Auth Validation   │      │  - Link Data    │
-│  - Secret Mgmt      │      │  - Business Logic    │      │  - Tree Data    │
-└─────────────────────┘      └──────────────────────┘      └─────────────────┘
+┌─────────────────────┐      ┌──────────────────┐      ┌─────────────────┐
+│  GitHub Actions     │      │  App             │      │  Notion API     │
+│  (Public Repo)      │─────▶│  Deployment      │─────▶│                 │
+│                     │      │  (Private)       │      │                 │
+│  - Cron Schedule    │      │                  │      │                 │
+│  - HTTP Request     │      │  - Auth Valid.   │      │  - Link Data    │
+│  - Secret Mgmt      │      │  - Business Log. │      │  - Tree Data    │
+└─────────────────────┘      └──────────────────┘      └─────────────────┘
          │                            │
          │                            ▼
          │                     ┌──────────────────┐
@@ -172,8 +179,8 @@ All sensitive code stays in the private Notiolink repository:
 
 ## License
 
-This repository is part of the Notiolink project. All rights reserved.
+This repository is part of the App project. All rights reserved.
 
 ## Support
 
-For issues or questions, please refer to the private Notiolink repository documentation or contact the development team.
+For issues or questions, please refer to the private App repository documentation or contact the development team.

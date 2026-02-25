@@ -5,6 +5,7 @@ Use this checklist when migrating cron jobs from the private repository to this 
 ## Pre-Migration
 
 ### Repository Setup
+
 - [ ] Create new public GitHub repository
 - [ ] Initialize with README.md
 - [ ] Add .gitignore file
@@ -12,6 +13,7 @@ Use this checklist when migrating cron jobs from the private repository to this 
 - [ ] Create docs directory
 
 ### Files to Migrate
+
 - [ ] Copy `stalled-runner-cron.yml` workflow
 - [ ] Copy `cache-refresh-cron.yml` workflow
 - [ ] Create SETUP.md documentation
@@ -19,6 +21,7 @@ Use this checklist when migrating cron jobs from the private repository to this 
 - [ ] Create MIGRATION.md (this file)
 
 ### Secret Preparation
+
 - [ ] Verify CRON_SECRET is configured in private repo
 - [ ] Verify STALLED_RUNNER_BASE_URL is configured
 - [ ] Document secret requirements
@@ -29,12 +32,14 @@ Use this checklist when migrating cron jobs from the private repository to this 
 ### Phase 1: Parallel Deployment (Recommended)
 
 1. **Configure Public Repository**
+
    - [ ] Push workflow files to public repo
    - [ ] Configure secrets in public repo settings
    - [ ] Verify secret names match exactly
    - [ ] Enable GitHub Actions (if disabled)
 
 2. **Test Public Repository Workflows**
+
    - [ ] Manually trigger "Operation Queue Drain"
    - [ ] Check execution logs
    - [ ] Verify endpoint received request
@@ -57,6 +62,7 @@ Use this checklist when migrating cron jobs from the private repository to this 
 ### Phase 2: Decommission Private Workflows
 
 4. **Disable Private Repository Workflows**
+
    - [ ] Navigate to private repo
    - [ ] Go to Settings → Actions → General
    - [ ] Option A: Disable Actions entirely (if no other workflows)
@@ -73,6 +79,7 @@ Use this checklist when migrating cron jobs from the private repository to this 
 ## Post-Migration
 
 ### Documentation Updates
+
 - [ ] Update private repo README to reference public repo
 - [ ] Update team documentation
 - [ ] Update runbooks/operational procedures
@@ -80,6 +87,7 @@ Use this checklist when migrating cron jobs from the private repository to this 
 - [ ] Update monitoring/alerting configurations
 
 ### Security Verification
+
 - [ ] Verify no sensitive code in public repo
 - [ ] Check Git history for accidental commits
 - [ ] Confirm secrets are properly masked in logs
@@ -87,6 +95,7 @@ Use this checklist when migrating cron jobs from the private repository to this 
 - [ ] Set up branch protection (if desired)
 
 ### Monitoring Setup
+
 - [ ] Configure GitHub notifications for failures
 - [ ] Set up external monitoring (optional)
 - [ ] Create dashboard for workflow status
@@ -98,12 +107,14 @@ Use this checklist when migrating cron jobs from the private repository to this 
 If issues occur during migration:
 
 1. **Immediate Rollback**
+
    - [ ] Re-enable private repository workflows
    - [ ] Restore deleted workflow files from Git
    - [ ] Verify private workflows are running
    - [ ] Disable public repository workflows
 
 2. **Investigate Issues**
+
    - [ ] Review error logs from public workflows
    - [ ] Check secret configuration
    - [ ] Verify endpoint accessibility
@@ -150,12 +161,12 @@ Add any migration-specific notes here:
 
 ---
 
-**Migration Started**: ___________
+**Migration Started**: \***\*\_\_\_\*\***
 
-**Migration Completed**: ___________
+**Migration Completed**: \***\*\_\_\_\*\***
 
 **Issues Encountered**:
-- 
 
-**Resolutions**:
-- 
+- **Resolutions**:
+
+-

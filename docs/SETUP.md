@@ -34,16 +34,17 @@ Save the generated token securely.
 3. Click **New repository secret**
 4. Add the following secrets:
 
-| Secret Name | Value | Description |
-|-------------|-------|-------------|
-| `STALLED_RUNNER_BASE_URL` | `https://your-domain.com` | Base URL of your Notiolink deployment |
-| `CRON_SECRET` | (generated token) | Authentication token for cron endpoints |
+| Secret Name               | Value                     | Description                             |
+| ------------------------- | ------------------------- | --------------------------------------- |
+| `STALLED_RUNNER_BASE_URL` | `https://your-domain.com` | Base URL of your App deployment         |
+| `CRON_SECRET`             | (generated token)         | Authentication token for cron endpoints |
 
 ### Step 3: Verify Deployment Configuration
 
-Ensure your Notiolink deployment has the `CRON_SECRET` environment variable configured:
+Ensure your App deployment has the `CRON_SECRET` environment variable configured:
 
 **Vercel:**
+
 ```bash
 vercel env add CRON_SECRET
 ```
@@ -74,7 +75,7 @@ Edit the cron expression in the workflow YAML files:
 ```yaml
 on:
   schedule:
-    - cron: '2-59/5 * * * *'  # Modify this line
+    - cron: '2-59/5 * * * *' # Modify this line
 ```
 
 Cron format: `minute hour day month weekday`
@@ -126,6 +127,7 @@ The fallback workflow calls `/api/internal/task-executor/fallback/dispatch-drain
 **Cause**: Secret not configured or misspelled
 
 **Solution**:
+
 - Verify secret names match exactly (case-sensitive)
 - Check that secrets are configured at the repository level
 - Ensure no extra whitespace in secret values
@@ -135,6 +137,7 @@ The fallback workflow calls `/api/internal/task-executor/fallback/dispatch-drain
 **Cause**: CRON_SECRET mismatch
 
 **Solution**:
+
 - Verify GitHub secret matches deployment environment variable
 - Regenerate the secret and update both locations
 - Check for encoding issues (should be plain hex string)
@@ -144,6 +147,7 @@ The fallback workflow calls `/api/internal/task-executor/fallback/dispatch-drain
 **Cause**: Deployment unreachable
 
 **Solution**:
+
 - Verify `STALLED_RUNNER_BASE_URL` is correct
 - Check deployment is running and accessible
 - Test URL manually: `curl https://your-domain.com/api/internal/pipeline/operations/actions/drain`
@@ -153,6 +157,7 @@ The fallback workflow calls `/api/internal/task-executor/fallback/dispatch-drain
 **Cause**: Application error in endpoint
 
 **Solution**:
+
 - Check deployment logs for stack traces
 - Verify database connections are healthy
 - Check Notion API status (for cache refresh)
@@ -175,6 +180,7 @@ To enable more verbose logging, temporarily add a debug step to workflows:
 ### Timeout Settings
 
 Current timeouts are configured for safety:
+
 - Workflow timeout: 15 minutes
 - Drain endpoint: 120 seconds
 - Refresh endpoint: 120 seconds
@@ -184,6 +190,7 @@ Adjust based on your data volume and processing needs.
 ### Rate Limiting
 
 If you encounter rate limits:
+
 1. Increase interval between cron runs
 2. Reduce batch sizes in endpoint implementations
 3. Implement exponential backoff in workflows
@@ -206,16 +213,19 @@ The drain workflow is configured with a concurrency group per ref, so overlappin
 If migrating from the private repository:
 
 1. **Deploy public repository workflows first**
+
    - Keep private workflows active
    - Configure secrets in public repo
    - Test both run in parallel
 
 2. **Verify public workflows execute successfully**
+
    - Monitor several scheduled runs
    - Check endpoint logs for expected behavior
    - Verify no errors or failures
 
 3. **Disable private repository workflows**
+
    - Delete or comment out cron schedules in private repo
    - Keep workflow files as backup if desired
    - Update documentation to reference public repo

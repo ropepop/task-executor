@@ -18,6 +18,7 @@ This guide helps you verify that the cron jobs are functioning correctly in the 
 3. Click the button to enable Actions
 
 **Expected Result:**
+
 - Workflows become active
 - "Enable" button disappears
 - Workflows show in the Actions tab
@@ -27,12 +28,13 @@ This guide helps you verify that the cron jobs are functioning correctly in the 
 1. Go to: https://github.com/ropepop/task-executor/settings/secrets/actions/new
 2. Add the following secrets:
 
-| Secret Name | Value |
-|-------------|-------|
-| `STALLED_RUNNER_BASE_URL` | `https://links.jolkins.id.lv` |
-| `CRON_SECRET` | `T3lnYVQ0U_XWhTw1DDQmoGNRWXs_i58g0VqMIT-TI4SLU5Ui_kKfiHWEgMh-UNpm` |
+| Secret Name               | Value                                                              |
+| ------------------------- | ------------------------------------------------------------------ |
+| `STALLED_RUNNER_BASE_URL` | `https://links.jolkins.id.lv`                                      |
+| `CRON_SECRET`             | `T3lnYVQ0U_XWhTw1DDQmoGNRWXs_i58g0VqMIT-TI4SLU5Ui_kKfiHWEgMh-UNpm` |
 
 **Expected Result:**
+
 - Both secrets appear in the secrets list
 - No errors during creation
 
@@ -48,6 +50,7 @@ This guide helps you verify that the cron jobs are functioning correctly in the 
 6. Click on the run to view logs
 
 **Expected Logs:**
+
 ```
 ✓ Validate required secrets
   - No errors about missing secrets
@@ -58,6 +61,7 @@ This guide helps you verify that the cron jobs are functioning correctly in the 
 ```
 
 **Success Criteria:**
+
 - ✅ Green checkmark ✓
 - ✅ HTTP status code 200 or 201
 - ✅ No authentication errors
@@ -73,6 +77,7 @@ This guide helps you verify that the cron jobs are functioning correctly in the 
 6. Click on the run to view logs
 
 **Expected Logs:**
+
 ```
 ✓ Validate required secrets
   - No errors about missing secrets
@@ -83,6 +88,7 @@ This guide helps you verify that the cron jobs are functioning correctly in the 
 ```
 
 **Success Criteria:**
+
 - ✅ Green checkmark ✓
 - ✅ HTTP status code 200 or 201
 - ✅ No authentication errors
@@ -93,6 +99,7 @@ This guide helps you verify that the cron jobs are functioning correctly in the 
 After enabling and configuring:
 
 1. Wait for the next scheduled run:
+
    - **Operation Queue Drain**: At 2, 7, 12, 17... minutes past the hour
    - **Cache Refresh**: At 4, 14, 24, 34... minutes past the hour
 
@@ -100,6 +107,7 @@ After enabling and configuring:
 3. Check that workflows trigger automatically
 
 **Expected Result:**
+
 - New runs appear automatically at scheduled times
 - Runs complete successfully with green checkmarks
 - No manual intervention required
@@ -112,6 +120,7 @@ After 24 hours, check:
 2. Review the execution history
 
 **Expected Statistics (per 24 hours):**
+
 - **Operation Queue Drain**: ~288 runs (every 5 minutes)
 - **Cache Refresh**: ~144 runs (every 10 minutes)
 - **Success rate**: Should be >95%
@@ -123,6 +132,7 @@ After 24 hours, check:
 **Cause**: GitHub Actions not enabled or secrets not configured
 
 **Solution**:
+
 1. Enable Actions (Step 1)
 2. Add secrets (Step 2)
 3. Manually trigger workflows (Step 3)
@@ -132,6 +142,7 @@ After 24 hours, check:
 **Cause**: Secrets not configured or misspelled
 
 **Solution**:
+
 1. Go to Settings → Secrets and variables → Actions
 2. Verify both secrets exist:
    - `STALLED_RUNNER_BASE_URL`
@@ -144,6 +155,7 @@ After 24 hours, check:
 **Cause**: CRON_SECRET mismatch between GitHub and deployment
 
 **Solution**:
+
 1. Verify the CRON_SECRET in GitHub matches `.env.local`:
    ```bash
    # Check your local .env.local
@@ -158,6 +170,7 @@ After 24 hours, check:
 **Cause**: Deployment URL is unreachable
 
 **Solution**:
+
 1. Verify `STALLED_RUNNER_BASE_URL` is correct
 2. Test URL manually:
    ```bash
@@ -171,6 +184,7 @@ After 24 hours, check:
 **Cause**: Application error in the endpoint
 
 **Solution**:
+
 1. Check deployment logs (Vercel, etc.)
 2. Look for errors around the workflow run time
 3. Verify database connections (Supabase)
@@ -182,6 +196,7 @@ After 24 hours, check:
 **Cause**: GitHub Actions disabled or repository inactive
 
 **Solution**:
+
 1. Verify Actions is enabled (Step 1)
 2. Check repository has recent activity
 3. Ensure workflows are not disabled in Settings
@@ -192,12 +207,14 @@ After 24 hours, check:
 Use this checklist to track verification progress:
 
 ### Setup
+
 - [ ] GitHub Actions enabled
 - [ ] STALLED_RUNNER_BASE_URL secret configured
 - [ ] CRON_SECRET secret configured
 - [ ] Both workflows visible in Actions tab
 
 ### Manual Testing
+
 - [ ] Operation Queue Drain manual run successful
 - [ ] Cache Refresh manual run successful
 - [ ] Both workflows return HTTP 200/201
@@ -205,12 +222,14 @@ Use this checklist to track verification progress:
 - [ ] Completion times are acceptable
 
 ### Automated Testing
+
 - [ ] First scheduled run executed automatically
 - [ ] Scheduled runs continue without issues
 - [ ] Success rate is >95% over 24 hours
 - [ ] No missed scheduled runs
 
 ### Cleanup Verification
+
 - [ ] Original workflows removed from links repository
 - [ ] Git history shows deletion commit
 - [ ] No duplicate workflows running
@@ -218,16 +237,19 @@ Use this checklist to track verification progress:
 ## Monitoring Best Practices
 
 ### Daily Checks
+
 - Review Actions tab for any failures
 - Check success rate percentage
 - Monitor execution times
 
 ### Weekly Checks
+
 - Review total execution count
 - Check for any pattern in failures
 - Verify secrets haven't expired
 
 ### Monthly Checks
+
 - Rotate CRON_SECRET (security best practice)
 - Review and optimize cron schedules if needed
 - Update documentation if processes changed
@@ -236,26 +258,28 @@ Use this checklist to track verification progress:
 
 After 48 hours of operation, you should see:
 
-| Metric | Expected Value |
-|--------|----------------|
-| Operation Queue Drain runs/day | ~288 |
-| Cache Refresh runs/day | ~144 |
-| Success rate | >95% |
-| Average execution time (drain) | <60 seconds |
-| Average execution time (refresh) | <90 seconds |
-| Authentication failures | 0 |
-| Connection timeouts | <1% |
+| Metric                           | Expected Value |
+| -------------------------------- | -------------- |
+| Operation Queue Drain runs/day   | ~288           |
+| Cache Refresh runs/day           | ~144           |
+| Success rate                     | >95%           |
+| Average execution time (drain)   | <60 seconds    |
+| Average execution time (refresh) | <90 seconds    |
+| Authentication failures          | 0              |
+| Connection timeouts              | <1%            |
 
 ## Next Steps After Verification
 
 Once verified working:
 
 1. **Update team documentation**
+
    - Note new repository location
    - Share verification results
    - Update runbooks
 
 2. **Set up monitoring alerts** (optional)
+
    - GitHub notifications for failures
    - External monitoring service
    - Slack/Discord webhooks
@@ -268,6 +292,7 @@ Once verified working:
 ## Support
 
 If issues persist after troubleshooting:
+
 - Check GitHub Status: https://www.githubstatus.com/
 - Review GitHub Actions documentation
 - Contact repository maintainers
