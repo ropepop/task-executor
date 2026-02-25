@@ -54,6 +54,13 @@ jobs:
 
           drain_url="${STALLED_RUNNER_BASE_URL%/}/api/internal/pipeline/operations/actions/drain"
           response_file="$(mktemp)"
+          chain_depth_raw="${CHAIN_DEPTH_INPUT:-0}"
+          if [[ "${chain_depth_raw}" =~ ^[0-9]+$ ]]; then
+            chain_depth="${chain_depth_raw}"
+          else
+            chain_depth=0
+          fi
+          chain_origin="${CHAIN_ORIGIN_INPUT:-manual}"
 
           status_code="$(
             curl \
@@ -66,6 +73,10 @@ jobs:
               --request POST \
               --header "Authorization: Bearer ${CRON_SECRET}" \
               --header "Content-Type: application/json" \
+              --header "X-Cron-Source: task-executor" \
+              --header "X-Cron-Run-Id: ${GITHUB_RUN_ID}" \
+              --header "X-Cron-Event: ${GITHUB_EVENT_NAME}" \
+              --header "X-Cron-Chain-Depth: ${chain_depth}" \
               "${drain_url}"
           )"
 
@@ -79,39 +90,62 @@ jobs:
 
           before_pending="$(jq -r '(.data.before.pendingCount // .before.pendingCount // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
           before_dispatched="$(jq -r '(.data.before.dispatchedCount // .before.dispatchedCount // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
+          before_stalled_total="$(jq -r '(.data.before.stalledTotal // .before.stalledTotal // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
+          before_never_dispatched="$(jq -r '(.data.before.neverDispatchedCount // .before.neverDispatchedCount // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
           after_pending="$(jq -r '(.data.after.pendingCount // .after.pendingCount // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
           after_dispatched="$(jq -r '(.data.after.dispatchedCount // .after.dispatchedCount // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
+          after_stalled_total="$(jq -r '(.data.after.stalledTotal // .after.stalledTotal // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
+          after_never_dispatched="$(jq -r '(.data.after.neverDispatchedCount // .after.neverDispatchedCount // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
           processed_estimate="$(jq -r '(.data.processedEstimate // .processedEstimate // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
+          progress_hint="$(jq -r 'if (.data.progressHint // .progressHint) == true then "true" elif (.data.progressHint // .progressHint) == false then "false" else "unset" end' "${response_file}" 2>/dev/null || echo unset)"
 
           before_backlog=$((before_pending + before_dispatched))
           after_backlog=$((after_pending + after_dispatched))
-
-          chain_depth_raw="${CHAIN_DEPTH_INPUT:-0}"
-          if [[ "${chain_depth_raw}" =~ ^[0-9]+$ ]]; then
-            chain_depth="${chain_depth_raw}"
-          else
-            chain_depth=0
-          fi
-
-          chain_origin="${CHAIN_ORIGIN_INPUT:-manual}"
           max_chain_depth=24
           should_chain=false
           decision_reason=""
+          progress_made=false
+          progress_signal="none"
+
+          if [ "${progress_hint}" = "true" ]; then
+            progress_made=true
+            progress_signal="progressHint=true"
+          elif [ "${progress_hint}" = "false" ]; then
+            progress_signal="progressHint=false"
+          elif [ "${processed_estimate}" -gt 0 ]; then
+            progress_made=true
+            progress_signal="processedEstimate>0"
+          elif [ "${before_backlog}" -gt "${after_backlog}" ]; then
+            progress_made=true
+            progress_signal="backlog_decreased"
+          elif [ "${before_stalled_total}" -gt "${after_stalled_total}" ]; then
+            progress_made=true
+            progress_signal="stalledTotal_decreased"
+          elif [ "${before_never_dispatched}" -gt "${after_never_dispatched}" ]; then
+            progress_made=true
+            progress_signal="neverDispatched_decreased"
+          fi
 
           if [ "${after_backlog}" -le 0 ]; then
             decision_reason="No backlog remains after drain"
-          elif [ "${processed_estimate}" -le 0 ]; then
-            decision_reason="No progress in this run (processedEstimate <= 0)"
           elif [ "${chain_depth}" -ge "${max_chain_depth}" ]; then
             decision_reason="Maximum chain depth reached (${chain_depth}/${max_chain_depth})"
+          elif [ "${progress_made}" != "true" ]; then
+            decision_reason="Backlog remains but no progress signal (${progress_signal})"
           else
             should_chain=true
-            decision_reason="Backlog remains and progress made"
+            decision_reason="Backlog remains and progress made (${progress_signal})"
           fi
 
           echo "Backlog before: ${before_backlog} (pending=${before_pending}, dispatched=${before_dispatched})"
           echo "Backlog after: ${after_backlog} (pending=${after_pending}, dispatched=${after_dispatched})"
+          echo "Stalled total before: ${before_stalled_total}"
+          echo "Stalled total after: ${after_stalled_total}"
+          echo "Never-dispatched before: ${before_never_dispatched}"
+          echo "Never-dispatched after: ${after_never_dispatched}"
           echo "Processed estimate: ${processed_estimate}"
+          echo "Progress hint: ${progress_hint}"
+          echo "Progress signal: ${progress_signal}"
           echo "Chain context: depth=${chain_depth}, origin=${chain_origin}"
           echo "Chain decision: ${should_chain} (${decision_reason})"
 
@@ -121,7 +155,13 @@ jobs:
             echo "- HTTP status: \`${status_code}\`"
             echo "- Backlog before: \`${before_backlog}\` (pending=\`${before_pending}\`, dispatched=\`${before_dispatched}\`)"
             echo "- Backlog after: \`${after_backlog}\` (pending=\`${after_pending}\`, dispatched=\`${after_dispatched}\`)"
+            echo "- Stalled total before: \`${before_stalled_total}\`"
+            echo "- Stalled total after: \`${after_stalled_total}\`"
+            echo "- Never-dispatched before: \`${before_never_dispatched}\`"
+            echo "- Never-dispatched after: \`${after_never_dispatched}\`"
             echo "- Processed estimate: \`${processed_estimate}\`"
+            echo "- Progress hint: \`${progress_hint}\`"
+            echo "- Progress signal: \`${progress_signal}\`"
             echo "- Chain depth: \`${chain_depth}\` (max \`${max_chain_depth}\`)"
             echo "- Chain origin: \`${chain_origin}\`"
             echo "- Chain decision: \`${should_chain}\`"

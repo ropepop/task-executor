@@ -101,13 +101,16 @@ The drain workflow can queue a follow-up worker (`workflow_dispatch`) to improve
 
 Guard conditions:
 - Chain only if `after.pendingCount + after.dispatchedCount > 0`
-- Chain only if `processedEstimate > 0`
+- Chain only if progress exists:
+  - Prefer `progressHint` from drain response when present
+  - Fallback to delta-based signals: `processedEstimate > 0`, backlog decrease, stalled-total decrease, or never-dispatched decrease
 - Chain only if current `chain_depth < 24`
 
 Additional behavior:
 - Follow-up runs use `chain_origin=auto-backlog` and increment `chain_depth`
 - If chaining was required by guard conditions but workflow self-dispatch fails (non-2xx), the job fails
 - No extra repository secrets are required; chaining uses the workflow `GITHUB_TOKEN`
+- Drain requests include trace headers for observability: `X-Cron-Source`, `X-Cron-Run-Id`, `X-Cron-Event`, `X-Cron-Chain-Depth`
 
 ## Troubleshooting
 
