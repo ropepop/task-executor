@@ -102,7 +102,7 @@ The drain workflow can queue a follow-up worker (`workflow_dispatch`) to improve
 Guard conditions:
 - Chain only if `after.pendingCount + after.dispatchedCount > 0`
 - Chain only if `processedEstimate > 0`
-- Chain only if current `chain_depth < 6`
+- Chain only if current `chain_depth < 24`
 
 Additional behavior:
 - Follow-up runs use `chain_origin=auto-backlog` and increment `chain_depth`
@@ -167,9 +167,9 @@ To enable more verbose logging, temporarily add a debug step to workflows:
 ### Timeout Settings
 
 Current timeouts are configured for safety:
-- Workflow timeout: 10 minutes
-- Drain endpoint: 45 seconds
-- Refresh endpoint: 90 seconds
+- Workflow timeout: 15 minutes
+- Drain endpoint: 120 seconds
+- Refresh endpoint: 120 seconds
 
 Adjust based on your data volume and processing needs.
 

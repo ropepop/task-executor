@@ -23,7 +23,7 @@ This repository contains GitHub Actions workflows that trigger scheduled mainten
 - Returns before/after snapshots of the queue state
 - Computes `after` backlog (`pending + dispatched`) and `processedEstimate` from drain response
 - Guardedly self-dispatches a follow-up drain worker when backlog remains and progress was made
-- Stops self-dispatch when backlog is empty, no progress is made, or chain depth reaches 6
+- Stops self-dispatch when backlog is empty, no progress is made, or chain depth reaches 24
 - Uses workflow concurrency locking so overlapping drain workers on the same ref do not run in parallel
 
 ### 2. Cache Refresh
@@ -102,7 +102,7 @@ All sensitive code stays in the private Notiolink repository:
 
 1. **Bearer Token Authentication**: All cron endpoints require a valid `CRON_SECRET` in the `Authorization` header
 2. **Secret Masking**: GitHub Actions automatically masks secrets in logs
-3. **Timeout Protection**: Each workflow has a 10-minute timeout to prevent runaway executions
+3. **Timeout Protection**: Each workflow has a 15-minute timeout to prevent runaway executions
 4. **HTTP Validation**: Endpoints validate request methods and reject unauthorized access
 
 ## Monitoring

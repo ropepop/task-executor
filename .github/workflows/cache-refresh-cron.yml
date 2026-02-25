@@ -12,7 +12,7 @@ jobs:
   refresh:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -47,7 +47,7 @@ jobs:
               --silent \
               --show-error \
               --connect-timeout 10 \
-              --max-time 90 \
+              --max-time 120 \
               --output "${response_file}" \
               --write-out '%{http_code}' \
               --request POST \
