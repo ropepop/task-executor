@@ -5,7 +5,7 @@ This document provides detailed instructions for setting up and maintaining the 
 ## Quick Start
 
 1. Configure required secrets in GitHub repository settings
-2. Mother Backlog Chain will automatically launch drain follow-up runs on schedule
+2. Operation Queue Drain runs automatically on schedule and self-chains when needed
 3. Monitor execution in the Actions tab
 
 ## Detailed Setup
@@ -55,11 +55,8 @@ Set the environment variable according to your platform's documentation.
 ### Step 4: Test the Workflows
 
 1. Go to **Actions** tab
-2. Select **Mother Backlog Chain** workflow and run once to validate parent dispatch
+2. Select **Operation Queue Drain** workflow
 3. Click **Run workflow**
-4. Confirm it dispatches the chain `mother -> kid1 -> kid2 -> kid3 -> stop`
-5. Select **Operation Queue Drain** workflow only for manual troubleshooting runs
-6. Click **Run workflow**
    - Optional inputs:
      - `chain_depth` (default `0`)
      - `chain_origin` (default `manual`)
@@ -71,11 +68,10 @@ Set the environment variable according to your platform's documentation.
      - `backoff_cap_sec` (default `300`)
      - `backoff_max_retries` (default `7`)
      - `backoff_jitter_pct` (default `25`)
-7. Wait for execution to complete
-8. Check logs for success/failure
+4. Wait for execution to complete
+5. Check logs for success/failure
 
 Repeat for **Cache Refresh** workflow.
-Repeat for **Drain Fallback Dispatch** workflow.
 
 ## Maintenance
 
@@ -86,7 +82,7 @@ Edit the cron expression in the workflow YAML files:
 ```yaml
 on:
   schedule:
-    - cron: '2-59/6 * * * *' # Mother Backlog Chain schedule
+    - cron: '2-59/6 * * * *' # Operation Queue Drain schedule
 ```
 
 Cron format: `minute hour day month weekday`
@@ -112,8 +108,6 @@ Use [crontab.guru](https://crontab.guru) to validate cron expressions.
 
 The drain workflow runs a strict single-item loop and can queue a follow-up worker (`workflow_dispatch`) when backlog remains and run budget is exhausted after a successful item transition.
 
-The parent **Mother Backlog Chain** workflow dispatches the drain workflow as `mother -> kid1 -> kid2 -> kid3 -> stop` per run.
-
 Guard conditions:
 - Chain only if `after.pendingCount + after.dispatchedCount > 0`
 - Chain only if last transition succeeded (`succeededCount == 1`)
@@ -138,15 +132,6 @@ Additional behavior:
   - `X-Cron-Source`, `X-Cron-Run-Id`, `X-Cron-Event`, `X-Cron-Chain-Depth`, `X-Cron-Runtime-Tier`, `X-Cron-Target-Runtime-Sec`
   - `X-Cron-Processing-Mode`, `X-Cron-Max-Items`, `X-Cron-Backoff-Strategy`
 - Step summary includes: `decision_code`, `decision_reason`, `iteration_count`, `run_budget_sec`, `remaining_budget_sec`, `chain_action`
-
-### Fallback Dispatch Guard
-
-The fallback workflow calls `/api/internal/task-executor/fallback/dispatch-drain` every 10 minutes, but first applies local preflight guards:
-
-- Skip if any drain run is currently `in_progress` or `pending`
-- Skip if the latest completed drain run finished within the last 6 minutes (regardless of conclusion)
-
-Only when preflight passes does the workflow call the fallback endpoint.
 
 ## Troubleshooting
 

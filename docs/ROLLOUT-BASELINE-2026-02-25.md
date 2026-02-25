@@ -12,7 +12,6 @@ Pre-change baseline captured on **2026-02-25** before adaptive runtime rollout.
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | `stalled-runner-cron.yml` | 70 | 70 | 67 | 1 | 2 | 0 | 4.29% |
 | `cache-refresh-cron.yml` | 26 | 26 | 23 | 3 | 0 | 0 | 11.54% |
-| `drain-fallback-dispatch-cron.yml` | 1 | 1 | 1 | 0 | 0 | 0 | 0.00% |
 
 ## Duration snapshot (seconds)
 
@@ -20,7 +19,6 @@ Pre-change baseline captured on **2026-02-25** before adaptive runtime rollout.
 | --- | ---: | ---: | ---: | ---: | ---: |
 | `stalled-runner-cron.yml` | 9 | 33 | 64 | 70 | 30 |
 | `cache-refresh-cron.yml` | 12 | 18 | 23 | 26 | 18 |
-| `drain-fallback-dispatch-cron.yml` | 39 | 39 | 39 | 39 | 39 |
 
 ## Post-rollout comparison targets
 

@@ -1,10 +1,12 @@
 name: Operation Queue Drain
 
 on:
+  schedule:
+    - cron: '2-59/6 * * * *'
   workflow_dispatch:
     inputs:
       chain_depth:
-        description: Current backlog chain depth (0 for manual/mother-dispatched runs)
+        description: Current backlog chain depth (0 for scheduled/manual runs)
         required: false
         default: '0'
       chain_origin:
