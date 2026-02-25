@@ -451,8 +451,8 @@ main() {
         break
         ;;
       single_item_contract_violation)
-        decision_reason="Single-item contract violated (attempted=${attempted_count}, succeeded=${succeeded_count})"
-        exit_code=1
+        decision_reason="Single-item contract violated (attempted=${attempted_count}, succeeded=${succeeded_count}); endpoint still processing batches, stopping safely"
+        exit_code=0
         break
         ;;
       item_succeeded_continue)

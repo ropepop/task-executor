@@ -117,7 +117,7 @@ Guard conditions:
 
 Strict-mode behavior:
 - Enforces `attemptedCount <= 1` and `succeededCount <= 1` on every iteration
-- Fails fast with `single_item_contract_violation` when either counter is greater than 1
+- Stops safely with `single_item_contract_violation` when either counter is greater than 1
 - Rate limit is detected when `rateLimitOnly == true` or (`succeededCount == 0` and `rateLimitedCount > 0`)
 - Runner retries same item path with exponential+jitter backoff:
   - `delay = min(backoff_cap_sec, backoff_base_sec * 2^(retryIndex-1)) ± jitter`

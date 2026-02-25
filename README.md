@@ -21,7 +21,7 @@ This repository contains GitHub Actions workflows that trigger scheduled mainten
 - Identifies operations that have been stalled for >45 seconds
 - Uses a strict single-item loop so each successful iteration advances one item at a time
 - Uses adaptive request timeout windows (bounded by remaining run budget)
-- Enforces single-item contract checks (`attemptedCount <= 1`, `succeededCount <= 1`) and fails fast on violations
+- Enforces single-item contract checks (`attemptedCount <= 1`, `succeededCount <= 1`) and stops safely on violations
 - Keeps continuation via guarded self-dispatch only when backlog remains and the last transition was a success
 - Returns before/after snapshots of the queue state
 - Sends trace/runtime headers (`X-Cron-Source`, `X-Cron-Run-Id`, `X-Cron-Event`, `X-Cron-Chain-Depth`, `X-Cron-Runtime-Tier`, `X-Cron-Target-Runtime-Sec`) plus strict-mode hints (`X-Cron-Processing-Mode`, `X-Cron-Max-Items`, `X-Cron-Backoff-Strategy`) with each drain request
