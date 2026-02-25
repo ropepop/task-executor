@@ -5,7 +5,7 @@ This document provides detailed instructions for setting up and maintaining the 
 ## Quick Start
 
 1. Configure required secrets in GitHub repository settings
-2. Workflows will automatically run on their scheduled times
+2. Mother Backlog Chain will automatically launch drain follow-up runs on schedule
 3. Monitor execution in the Actions tab
 
 ## Detailed Setup
@@ -55,8 +55,11 @@ Set the environment variable according to your platform's documentation.
 ### Step 4: Test the Workflows
 
 1. Go to **Actions** tab
-2. Select **Operation Queue Drain** workflow
+2. Select **Mother Backlog Chain** workflow and run once to validate parent dispatch
 3. Click **Run workflow**
+4. Confirm it dispatches the chain `mother -> kid1 -> kid2 -> kid3 -> stop`
+5. Select **Operation Queue Drain** workflow only for manual troubleshooting runs
+6. Click **Run workflow**
    - Optional inputs:
      - `chain_depth` (default `0`)
      - `chain_origin` (default `manual`)
@@ -68,8 +71,8 @@ Set the environment variable according to your platform's documentation.
      - `backoff_cap_sec` (default `300`)
      - `backoff_max_retries` (default `7`)
      - `backoff_jitter_pct` (default `25`)
-4. Wait for execution to complete
-5. Check logs for success/failure
+7. Wait for execution to complete
+8. Check logs for success/failure
 
 Repeat for **Cache Refresh** workflow.
 Repeat for **Drain Fallback Dispatch** workflow.
@@ -83,7 +86,7 @@ Edit the cron expression in the workflow YAML files:
 ```yaml
 on:
   schedule:
-    - cron: '2-59/6 * * * *' # Modify this line
+    - cron: '2-59/6 * * * *' # Mother Backlog Chain schedule
 ```
 
 Cron format: `minute hour day month weekday`
@@ -95,7 +98,7 @@ Use [crontab.guru](https://crontab.guru) to validate cron expressions.
 1. Generate a new secret token
 2. Update the GitHub secret first
 3. Update the deployment environment variable
-4. Test both workflows to verify authentication
+4. Test affected workflows to verify authentication
 
 ### Monitoring Best Practices
 
@@ -108,6 +111,8 @@ Use [crontab.guru](https://crontab.guru) to validate cron expressions.
 ### Operation Queue Drain Backlog Chaining
 
 The drain workflow runs a strict single-item loop and can queue a follow-up worker (`workflow_dispatch`) when backlog remains and run budget is exhausted after a successful item transition.
+
+The parent **Mother Backlog Chain** workflow dispatches the drain workflow as `mother -> kid1 -> kid2 -> kid3 -> stop` per run.
 
 Guard conditions:
 - Chain only if `after.pendingCount + after.dispatchedCount > 0`

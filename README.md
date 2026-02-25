@@ -10,7 +10,7 @@ This repository contains GitHub Actions workflows that trigger scheduled mainten
 
 ### 1. Operation Queue Drain
 
-**Schedule**: Every 6 minutes (at 2, 8, 14, 20, ..., 56 minutes past the hour)
+**Schedule**: Dispatch-only (launched by Mother Backlog Chain)
 
 **Purpose**: Processes stalled operations in the queue to ensure reliable execution of background tasks.
 
@@ -60,6 +60,18 @@ This repository contains GitHub Actions workflows that trigger scheduled mainten
 - Skips fallback dispatch when drain workers are already active/pending
 - Skips fallback dispatch when a drain run completed within the last 6 minutes
 
+### 4. Mother Backlog Chain
+
+**Schedule**: Every 6 minutes (at 2, 8, 14, 20, ..., 56 minutes past the hour)
+
+**Purpose**: Acts as the parent scheduler for drain backlog work.
+
+**What it does**:
+
+- Dispatches **Operation Queue Drain** once as the mother launch
+- Dispatches 3 kid drain runs (`kid1`, `kid2`, `kid3`) and then stops
+- Uses workflow-dispatch inputs for strict-mode/backoff settings
+
 ## Setup Instructions
 
 ### Required Secrets
@@ -88,7 +100,7 @@ Configure the following secrets in your GitHub repository settings:
 
 ### Manual Execution
 
-Both workflows support manual triggering for testing:
+Workflows support manual triggering for testing:
 
 1. Go to the **Actions** tab in your GitHub repository
 2. Select the workflow you want to run
@@ -96,7 +108,7 @@ Both workflows support manual triggering for testing:
 4. Choose the branch (if applicable)
 5. Click **Run workflow**
 
-For **Operation Queue Drain**, optional manual `workflow_dispatch` inputs are available:
+For **Operation Queue Drain** (dispatch-only), optional manual `workflow_dispatch` inputs are available:
 - `chain_depth` (default: `0`)
 - `chain_origin` (default: `manual`)
 - `run_budget_minutes` (default: `100`)

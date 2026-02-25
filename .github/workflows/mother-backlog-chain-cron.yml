@@ -1,0 +1,108 @@
+name: Mother Backlog Chain
+
+on:
+  schedule:
+    - cron: '2-59/6 * * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: mother-backlog-chain-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  orchestrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Dispatch drain workflow (mother -> kid1 -> kid2 -> kid3 -> stop)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          dispatch_url="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/stalled-runner-cron.yml/dispatches"
+
+          dispatch_drain() {
+            local chain_depth="${1}"
+            local chain_origin="${2}"
+            local payload
+            payload="$(
+              jq -n \
+                --arg ref "${GITHUB_REF_NAME}" \
+                --arg chain_depth "${chain_depth}" \
+                --arg chain_origin "${chain_origin}" \
+                --arg run_budget_minutes "100" \
+                --arg max_request_timeout_sec "1800" \
+                --arg max_iterations "60" \
+                --arg min_iterations_before_chain "2" \
+                --arg backoff_base_sec "2" \
+                --arg backoff_cap_sec "300" \
+                --arg backoff_max_retries "7" \
+                --arg backoff_jitter_pct "25" \
+                '{
+                  ref:$ref,
+                  inputs:{
+                    chain_depth:$chain_depth,
+                    chain_origin:$chain_origin,
+                    run_budget_minutes:$run_budget_minutes,
+                    max_request_timeout_sec:$max_request_timeout_sec,
+                    max_iterations:$max_iterations,
+                    min_iterations_before_chain:$min_iterations_before_chain,
+                    backoff_base_sec:$backoff_base_sec,
+                    backoff_cap_sec:$backoff_cap_sec,
+                    backoff_max_retries:$backoff_max_retries,
+                    backoff_jitter_pct:$backoff_jitter_pct
+                  }
+                }'
+            )"
+
+            response_file="$(mktemp)"
+            status_code="$(
+              curl \
+                --silent \
+                --show-error \
+                --connect-timeout 10 \
+                --max-time 60 \
+                --output "${response_file}" \
+                --write-out '%{http_code}' \
+                --request POST \
+                --header "Accept: application/vnd.github+json" \
+                --header "Authorization: Bearer ${GITHUB_TOKEN}" \
+                --header "X-GitHub-Api-Version: 2022-11-28" \
+                --header "Content-Type: application/json" \
+                --data "${payload}" \
+                "${dispatch_url}"
+            )"
+
+            echo "Dispatched drain chain_depth=${chain_depth} origin=${chain_origin} status=${status_code}"
+            if [ -s "${response_file}" ]; then
+              cat "${response_file}"
+            fi
+            if [ "${status_code}" -lt 200 ] || [ "${status_code}" -ge 300 ]; then
+              echo "Failed to dispatch drain chain_depth=${chain_depth}"
+              exit 1
+            fi
+          }
+
+          # Mother dispatch.
+          dispatch_drain "0" "mother"
+
+          # Kid dispatches, then stop.
+          dispatch_drain "1" "kid1"
+          dispatch_drain "2" "kid2"
+          dispatch_drain "3" "kid3"
+
+          {
+            echo "### Mother Backlog Chain Summary"
+            echo ""
+            echo "- Dispatched drain runs: \`4\` (mother + kid1 + kid2 + kid3)"
+            echo "- Chain shape: \`mother -> kid1 -> kid2 -> kid3 -> stop\`"
+            echo "- Trigger source: \`${GITHUB_EVENT_NAME}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
