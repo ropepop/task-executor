@@ -22,7 +22,7 @@ This repository contains GitHub Actions workflows that trigger scheduled mainten
 - Uses a strict single-item loop so each successful iteration advances one item at a time
 - Uses adaptive request timeout windows (bounded by remaining run budget)
 - Enforces single-item contract checks (`attemptedCount <= 1`, `succeededCount <= 1`) and stops safely on violations
-- Keeps continuation via guarded self-dispatch only when backlog remains and the last transition was a success
+- Keeps continuation via generation chaining when backlog remains (`gen1 -> gen2 -> gen3 -> gen4`)
 - Returns before/after snapshots of the queue state
 - Sends trace/runtime headers (`X-Cron-Source`, `X-Cron-Run-Id`, `X-Cron-Event`, `X-Cron-Chain-Depth`, `X-Cron-Runtime-Tier`, `X-Cron-Target-Runtime-Sec`) plus strict-mode hints (`X-Cron-Processing-Mode`, `X-Cron-Max-Items`, `X-Cron-Backoff-Strategy`) with each drain request
 - Uses `succeededCount`, `rateLimitedCount`/`rateLimitOnly`, and backlog snapshots for decisions
@@ -30,7 +30,7 @@ This repository contains GitHub Actions workflows that trigger scheduled mainten
 - When provided, uses `sleep = max(retryAfterSec, computedBackoff)`
 - Stops gracefully on `rate_limit_retry_cap_reached` or `rate_limit_budget_exhausted` (no chain storming)
 - Never dispatches more than one follow-up worker per run
-- Dispatch continuation order is fixed: `firstrun -> secondrun -> thirdrun -> fourthrun` (terminal)
+- Dispatch continuation order is fixed: `gen1 -> gen2 -> gen3 -> gen4` (terminal, no `gen5`)
 - Uses workflow concurrency locking so overlapping drain workers on the same ref do not run in parallel
 
 ### 2. Cache Refresh
@@ -85,11 +85,11 @@ Workflows support manual triggering for testing:
 
 For **Operation Queue Drain**, optional manual `workflow_dispatch` inputs are available:
 - `chain_depth` (default: `0`)
-- `chain_origin` (default: `firstrun`)
+- `chain_origin` (default: `gen1`; legacy `firstrun..fourthrun` is accepted)
 - `run_budget_minutes` (default: `100`)
 - `max_request_timeout_sec` (default: `1800`)
 - `max_iterations` (default: `60`)
-- `min_iterations_before_chain` (default: `2`)
+- `min_iterations_before_chain` (legacy compatibility input; default: `2`)
 - `backoff_base_sec` (default: `2`)
 - `backoff_cap_sec` (default: `300`)
 - `backoff_max_retries` (default: `7`)

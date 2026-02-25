@@ -46,12 +46,36 @@ determine_runtime_tier() {
 chain_origin_for_depth() {
   local depth="$(safe_int "${1:-0}")"
   case "${depth}" in
-    0) echo "firstrun" ;;
-    1) echo "secondrun" ;;
-    2) echo "thirdrun" ;;
-    3) echo "fourthrun" ;;
+    0) echo "gen1" ;;
+    1) echo "gen2" ;;
+    2) echo "gen3" ;;
+    3) echo "gen4" ;;
     *) echo "followup-depth-${depth}" ;;
   esac
+}
+
+normalize_chain_origin() {
+  local raw="${1:-}"
+  raw="$(echo "${raw}" | tr '[:upper:]' '[:lower:]')"
+  case "${raw}" in
+    ""|gen1|firstrun) echo "gen1" ;;
+    gen2|secondrun) echo "gen2" ;;
+    gen3|thirdrun) echo "gen3" ;;
+    gen4|fourthrun) echo "gen4" ;;
+    *) echo "${raw}" ;;
+  esac
+}
+
+should_spawn_next_generation() {
+  local backlog_after="$(safe_int "${1:-0}")"
+  local chain_depth="$(safe_int "${2:-0}")"
+  local max_dispatch_depth="$(safe_int "${3:-3}")"
+
+  if [ "${backlog_after}" -gt 0 ] && [ "${chain_depth}" -lt "${max_dispatch_depth}" ]; then
+    echo "true"
+  else
+    echo "false"
+  fi
 }
 
 effective_rate_limit_only() {
@@ -215,6 +239,23 @@ emit_summary() {
 }
 
 run_self_test() {
+  # Generation mapping and legacy normalization.
+  [ "$(chain_origin_for_depth 0)" = "gen1" ]
+  [ "$(chain_origin_for_depth 1)" = "gen2" ]
+  [ "$(chain_origin_for_depth 2)" = "gen3" ]
+  [ "$(chain_origin_for_depth 3)" = "gen4" ]
+  [ "$(normalize_chain_origin firstrun)" = "gen1" ]
+  [ "$(normalize_chain_origin secondrun)" = "gen2" ]
+  [ "$(normalize_chain_origin thirdrun)" = "gen3" ]
+  [ "$(normalize_chain_origin fourthrun)" = "gen4" ]
+  [ "$(normalize_chain_origin gen3)" = "gen3" ]
+
+  # Backlog-driven generation spawn eligibility.
+  [ "$(should_spawn_next_generation 10 0 3)" = "true" ]
+  [ "$(should_spawn_next_generation 4 2 3)" = "true" ]
+  [ "$(should_spawn_next_generation 0 0 3)" = "false" ]
+  [ "$(should_spawn_next_generation 8 3 3)" = "false" ]
+
   # Contract validation.
   [ "$(single_item_contract_ok 1 1)" = "true" ]
   [ "$(single_item_contract_ok 2 1)" = "false" ]
@@ -262,7 +303,11 @@ main() {
   : "${GITHUB_EVENT_NAME:?Missing GITHUB_EVENT_NAME}"
 
   local chain_depth="$(safe_int "${CHAIN_DEPTH_INPUT:-0}")"
-  local chain_origin="${CHAIN_ORIGIN_INPUT:-$(chain_origin_for_depth "${chain_depth}")}"
+  local chain_origin_input="${CHAIN_ORIGIN_INPUT:-}"
+  local chain_origin_default
+  chain_origin_default="$(chain_origin_for_depth "${chain_depth}")"
+  local chain_origin
+  chain_origin="$(normalize_chain_origin "${chain_origin_input:-${chain_origin_default}}")"
   local run_budget_minutes="$(safe_int "${RUN_BUDGET_MINUTES_INPUT:-100}")"
   local max_request_timeout_sec="$(safe_int "${MAX_REQUEST_TIMEOUT_SEC_INPUT:-1800}")"
   local max_iterations="$(safe_int "${MAX_ITERATIONS_INPUT:-60}")"
@@ -279,7 +324,6 @@ main() {
   local dispatch_buffer_sec=90
   local max_chain_depth=500
   local max_dispatch_depth=3
-  local high_backlog_chain_threshold=300
 
   if [ "${run_budget_sec}" -lt 600 ]; then
     run_budget_sec=600
@@ -330,7 +374,6 @@ main() {
   local final_rate_limit_only="false"
   local final_retry_after_sec="0"
   local rate_limit_retry_count=0
-  local last_transition_was_success="false"
 
   while [ "${iteration_count}" -lt "${max_iterations}" ]; do
     iteration_count=$((iteration_count + 1))
@@ -468,7 +511,6 @@ main() {
         break
         ;;
       item_succeeded_continue)
-        last_transition_was_success="true"
         rate_limit_retry_count=0
         decision_reason="Current item executed successfully; evaluating next item"
 
@@ -487,7 +529,6 @@ main() {
         continue
         ;;
       rate_limited_only_no_success)
-        last_transition_was_success="false"
         rate_limit_retry_count=$((rate_limit_retry_count + 1))
 
         if [ "$(retry_cap_reached "${rate_limit_retry_count}" "${backoff_max_retries}")" = "true" ]; then
@@ -521,68 +562,56 @@ main() {
         continue
         ;;
       no_progress)
-        last_transition_was_success="false"
         decision_reason="No item succeeded and no rate-limit retry path available"
         break
         ;;
       *)
-        last_transition_was_success="false"
         decision_reason="Stopped by safety condition"
         break
         ;;
     esac
   done
 
-  if [ "${iteration_count}" -ge "${max_iterations}" ] && [ "${final_after_backlog}" -gt 0 ] && [ "${last_transition_was_success}" = "true" ] && [ "${decision_code}" = "item_succeeded_continue" ]; then
+  if [ -z "${decision_reason}" ]; then
+    if [ "${decision_code}" = "run_budget_exhausted" ]; then
+      decision_reason="Run budget exhausted before another iteration"
+    elif [ "${decision_code}" = "item_succeeded_continue" ]; then
+      decision_reason="Iteration ended after successful item execution"
+    else
+      if [ -z "${decision_code}" ]; then
+        decision_code="iteration_or_budget_guard_stop"
+      fi
+      decision_reason="Stopped after reaching iteration or budget guard"
+    fi
+  fi
+
+  local spawn_due_backlog="false"
+  if [ "$(should_spawn_next_generation "${final_after_backlog}" "${chain_depth}" "${max_dispatch_depth}")" = "true" ]; then
     should_dispatch="true"
     chain_action="self_dispatch"
-    decision_code="max_iterations_reached_with_progress"
-    decision_reason="Reached max iterations after successful item execution"
-  fi
-
-  if [ -z "${decision_reason}" ]; then
-    if [ "${iteration_count}" -ge "${max_iterations}" ] && [ "${final_after_backlog}" -gt 0 ] && [ "${last_transition_was_success}" = "true" ]; then
-      should_dispatch="true"
-      chain_action="self_dispatch"
-      decision_code="max_iterations_reached_with_progress"
-      decision_reason="Reached max iterations after successful item execution"
-    elif [ "${decision_code}" = "run_budget_exhausted" ] && [ "${final_after_backlog}" -gt 0 ] && [ "${last_transition_was_success}" = "true" ]; then
-      should_dispatch="true"
-      chain_action="self_dispatch"
-      decision_code="run_budget_exhausted_with_progress"
-      decision_reason="Budget exhausted after successful item execution"
-    else
-      decision_code="iteration_or_budget_guard_stop"
-      decision_reason="Stopped after reaching iteration or budget guard"
-      chain_action="none"
-    fi
-  fi
-
-  if [ "${final_after_backlog}" -le 0 ]; then
+    spawn_due_backlog="true"
+    decision_reason="${decision_reason}; backlog remains so next generation will be spawned"
+  else
     should_dispatch="false"
     chain_action="none"
-  fi
-  if [ "${chain_depth}" -ge "${max_chain_depth}" ]; then
-    should_dispatch="false"
-    chain_action="none"
-  fi
-  if [ "${chain_depth}" -ge "${max_dispatch_depth}" ]; then
-    should_dispatch="false"
-    chain_action="none"
-    if [ "${decision_code}" = "item_succeeded_continue" ] || [ "${decision_code}" = "run_budget_exhausted_with_progress" ] || [ "${decision_code}" = "max_iterations_reached_with_progress" ]; then
+    if [ "${final_after_backlog}" -le 0 ]; then
+      decision_code="no_backlog_remaining"
+      decision_reason="${decision_reason}; backlog cleared or empty"
+    elif [ "${chain_depth}" -ge "${max_chain_depth}" ]; then
+      decision_code="max_chain_depth_reached"
+      decision_reason="Backlog remains but maximum chain depth reached (${chain_depth}/${max_chain_depth})"
+    elif [ "${chain_depth}" -ge "${max_dispatch_depth}" ]; then
       decision_code="dispatch_depth_cap_reached"
-      decision_reason="Dispatch depth cap reached; fourthrun is terminal for follow-up queueing"
+      decision_reason="Backlog remains but generation cap reached (gen4 terminal, no gen5 spawn)"
     fi
   fi
-  if [ "${last_transition_was_success}" != "true" ]; then
-    should_dispatch="false"
-    chain_action="none"
-  fi
-  if [ "${should_dispatch}" = "true" ] && [ "${iteration_count}" -lt "${min_iterations_before_chain}" ] && [ "${final_after_backlog}" -lt "${high_backlog_chain_threshold}" ]; then
-    should_dispatch="false"
-    chain_action="none"
-    decision_code="chain_guard_min_iterations_not_met"
-    decision_reason="Chain guard blocked dispatch (iterations=${iteration_count} < min=${min_iterations_before_chain}, backlog=${final_after_backlog} < high=${high_backlog_chain_threshold})"
+
+  local current_generation next_generation
+  current_generation="$(chain_origin_for_depth "${chain_depth}")"
+  if [ "${should_dispatch}" = "true" ]; then
+    next_generation="$(chain_origin_for_depth "$((chain_depth + 1))")"
+  else
+    next_generation="none"
   fi
 
   local run_end_epoch elapsed_total_sec remaining_budget_sec
@@ -605,8 +634,11 @@ main() {
   echo "Rate-limit retries used: ${rate_limit_retry_count}"
   echo "Backoff config: base=${backoff_base_sec}s cap=${backoff_cap_sec}s jitterPct=${backoff_jitter_pct} maxRetries=${backoff_max_retries}"
   echo "Chain context: depth=${chain_depth}, origin=${chain_origin}"
-  echo "Chain dispatch depth cap: ${max_dispatch_depth} (firstrun->secondrun->thirdrun->fourthrun)"
-  echo "Chain guard: minIterationsBeforeChain=${min_iterations_before_chain}, highBacklogThreshold=${high_backlog_chain_threshold}"
+  echo "Current generation: ${current_generation}"
+  echo "Spawn due backlog: ${spawn_due_backlog}"
+  echo "Next generation: ${next_generation}"
+  echo "Chain dispatch depth cap: ${max_dispatch_depth} (gen1->gen2->gen3->gen4)"
+  echo "Chain control input (legacy): minIterationsBeforeChain=${min_iterations_before_chain}"
   echo "Decision code: ${decision_code}"
   echo "Decision reason: ${decision_reason}"
   echo "Iteration count: ${iteration_count}/${max_iterations}"
@@ -629,9 +661,11 @@ main() {
   emit_summary "- Backoff config: base=\`${backoff_base_sec}\` cap=\`${backoff_cap_sec}\` jitterPct=\`${backoff_jitter_pct}\` maxRetries=\`${backoff_max_retries}\`"
   emit_summary "- Chain depth: \`${chain_depth}\` (max \`${max_chain_depth}\`)"
   emit_summary "- Chain origin: \`${chain_origin}\`"
-  emit_summary "- Chain dispatch depth cap: \`${max_dispatch_depth}\` (fourthrun is terminal)"
-  emit_summary "- Chain guard min iterations: \`${min_iterations_before_chain}\`"
-  emit_summary "- Chain guard high backlog threshold: \`${high_backlog_chain_threshold}\`"
+  emit_summary "- Current generation: \`${current_generation}\`"
+  emit_summary "- Spawn due backlog: \`${spawn_due_backlog}\`"
+  emit_summary "- Next generation: \`${next_generation}\`"
+  emit_summary "- Chain dispatch depth cap: \`${max_dispatch_depth}\` (gen4 is terminal)"
+  emit_summary "- Chain control input (legacy): minIterationsBeforeChain=\`${min_iterations_before_chain}\`"
   emit_summary "- Decision code: \`${decision_code}\`"
   emit_summary "- Decision reason: ${decision_reason}"
   emit_summary "- Iteration count: \`${iteration_count}\` / \`${max_iterations}\`"
