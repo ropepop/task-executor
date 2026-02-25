@@ -13,6 +13,10 @@ on:
         description: Origin marker for run continuity telemetry
         required: false
         default: manual
+      disable_padding:
+        description: Disable runtime padding sleep for manual recovery runs
+        required: false
+        default: 'false'
 
 permissions:
   actions: write
@@ -49,6 +53,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           CHAIN_DEPTH_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.chain_depth || '0' }}
           CHAIN_ORIGIN_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.chain_origin || github.event_name }}
+          DISABLE_PADDING_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.disable_padding || 'false' }}
         run: |
           set -euo pipefail
 
@@ -62,6 +67,11 @@ jobs:
             chain_depth=0
           fi
           chain_origin="${CHAIN_ORIGIN_INPUT:-manual}"
+          disable_padding_input_raw="$(echo "${DISABLE_PADDING_INPUT:-false}" | tr '[:upper:]' '[:lower:]')"
+          disable_padding=false
+          if [ "${disable_padding_input_raw}" = "true" ] || [ "${disable_padding_input_raw}" = "1" ] || [ "${disable_padding_input_raw}" = "yes" ]; then
+            disable_padding=true
+          fi
           runtime_tier="normal"
           target_runtime_sec=60
           if [ "${chain_depth}" -ge 8 ]; then
@@ -109,6 +119,10 @@ jobs:
           after_stalled_total="$(jq -r '(.data.after.stalledTotal // .after.stalledTotal // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
           after_never_dispatched="$(jq -r '(.data.after.neverDispatchedCount // .after.neverDispatchedCount // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
           processed_estimate="$(jq -r '(.data.processedEstimate // .processedEstimate // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
+          attempted_count="$(jq -r '(.data.attemptedCount // .attemptedCount // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
+          succeeded_count="$(jq -r '(.data.succeededCount // .succeededCount // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
+          failed_count="$(jq -r '(.data.failedCount // .failedCount // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
+          rate_limited_count="$(jq -r '(.data.rateLimitedCount // .rateLimitedCount // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
           progress_hint="$(
             jq -r '
               if ((.data | type) == "object" and (.data | has("progressHint"))) then
@@ -124,6 +138,29 @@ jobs:
               end
             ' "${response_file}" 2>/dev/null || echo unset
           )"
+          rate_limit_only="$(
+            jq -r '
+              if ((.data | type) == "object" and (.data | has("rateLimitOnly"))) then
+                if .data.rateLimitOnly == true then "true"
+                elif .data.rateLimitOnly == false then "false"
+                else "unset" end
+              elif has("rateLimitOnly") then
+                if .rateLimitOnly == true then "true"
+                elif .rateLimitOnly == false then "false"
+                else "unset" end
+              else
+                "unset"
+              end
+            ' "${response_file}" 2>/dev/null || echo unset
+          )"
+          retry_after_sec="$(jq -r '(.data.retryAfterSec // .retryAfterSec // "null")' "${response_file}" 2>/dev/null || echo null)"
+          if [ "${rate_limit_only}" = "unset" ]; then
+            if [ "${succeeded_count}" -eq 0 ] && [ "${rate_limited_count}" -gt 0 ]; then
+              rate_limit_only=true
+            else
+              rate_limit_only=false
+            fi
+          fi
           runtime_budget_sec="$(
             jq -r '
               if ((.data | type) == "object" and (.data | has("runtimeBudgetSec"))) then
@@ -147,6 +184,7 @@ jobs:
           max_chain_depth=24
           should_chain=false
           decision_reason=""
+          decision_code=""
           progress_made=false
           progress_signal="none"
 
@@ -171,24 +209,43 @@ jobs:
 
           if [ "${after_backlog}" -le 0 ]; then
             decision_reason="No backlog remains after drain"
+            decision_code="no_backlog_remaining"
           elif [ "${chain_depth}" -ge "${max_chain_depth}" ]; then
             decision_reason="Maximum chain depth reached (${chain_depth}/${max_chain_depth})"
+            decision_code="max_chain_depth_reached"
+          elif [ "${succeeded_count}" -eq 0 ] && [ "${rate_limited_count}" -gt 0 ]; then
+            decision_reason="rate_limited_only_no_success"
+            decision_code="rate_limited_only_no_success"
+          elif [ "${succeeded_count}" -gt 0 ]; then
+            should_chain=true
+            decision_reason="Backlog remains and successful work completed (${succeeded_count})"
+            decision_code="succeeded_count_positive"
+          elif [ "${before_backlog}" -gt "${after_backlog}" ] && [ "${rate_limit_only}" != "true" ]; then
+            should_chain=true
+            decision_reason="Backlog decreased and run is not rate-limit-only"
+            decision_code="backlog_decreased_non_rate_limit_only"
           elif [ "${progress_made}" != "true" ]; then
             decision_reason="Backlog remains but no progress signal (${progress_signal})"
+            decision_code="no_progress_signal"
           else
-            should_chain=true
-            decision_reason="Backlog remains and progress made (${progress_signal})"
+            decision_reason="Backlog remains but chaining contract not met"
+            decision_code="contract_not_met"
           fi
 
           run_before_pad_epoch="$(date +%s)"
           elapsed_before_pad_sec=$((run_before_pad_epoch - run_start_epoch))
-          padding_sec=$((target_runtime_sec - elapsed_before_pad_sec))
-          if [ "${padding_sec}" -gt 0 ]; then
-            echo "Applying runtime padding: sleeping ${padding_sec}s to hit target ${target_runtime_sec}s"
-            sleep "${padding_sec}"
+          padding_sec=0
+          if [ "${disable_padding}" = "true" ]; then
+            echo "Runtime padding disabled by input (disable_padding=${disable_padding_input_raw})"
           else
-            padding_sec=0
-            echo "No runtime padding needed (elapsed=${elapsed_before_pad_sec}s, target=${target_runtime_sec}s)"
+            padding_sec=$((target_runtime_sec - elapsed_before_pad_sec))
+            if [ "${padding_sec}" -gt 0 ]; then
+              echo "Applying runtime padding: sleeping ${padding_sec}s to hit target ${target_runtime_sec}s"
+              sleep "${padding_sec}"
+            else
+              padding_sec=0
+              echo "No runtime padding needed (elapsed=${elapsed_before_pad_sec}s, target=${target_runtime_sec}s)"
+            fi
           fi
           run_end_epoch="$(date +%s)"
           elapsed_total_sec=$((run_end_epoch - run_start_epoch))
@@ -200,10 +257,17 @@ jobs:
           echo "Never-dispatched before: ${before_never_dispatched}"
           echo "Never-dispatched after: ${after_never_dispatched}"
           echo "Processed estimate: ${processed_estimate}"
+          echo "Attempted count: ${attempted_count}"
+          echo "Succeeded count: ${succeeded_count}"
+          echo "Failed count: ${failed_count}"
+          echo "Rate-limited count: ${rate_limited_count}"
+          echo "Rate-limit-only: ${rate_limit_only}"
+          echo "Retry-after seconds: ${retry_after_sec}"
           echo "Progress hint: ${progress_hint}"
           echo "Progress signal: ${progress_signal}"
           echo "Runtime request: tier=${runtime_tier}, targetSec=${target_runtime_sec}"
           echo "Runtime applied: tier=${runtime_tier_reported}, budgetSec=${runtime_budget_sec}, usedMs=${runtime_used_ms}"
+          echo "Runtime padding disabled: ${disable_padding}"
           echo "Runtime wall-clock: elapsedBeforePadSec=${elapsed_before_pad_sec}, paddingSec=${padding_sec}, elapsedTotalSec=${elapsed_total_sec}"
           echo "Chain context: depth=${chain_depth}, origin=${chain_origin}"
           echo "Chain decision: ${should_chain} (${decision_reason})"
@@ -219,14 +283,22 @@ jobs:
             echo "- Never-dispatched before: \`${before_never_dispatched}\`"
             echo "- Never-dispatched after: \`${after_never_dispatched}\`"
             echo "- Processed estimate: \`${processed_estimate}\`"
+            echo "- Attempted count: \`${attempted_count}\`"
+            echo "- Succeeded count: \`${succeeded_count}\`"
+            echo "- Failed count: \`${failed_count}\`"
+            echo "- Rate-limited count: \`${rate_limited_count}\`"
+            echo "- Rate-limit-only: \`${rate_limit_only}\`"
+            echo "- Retry-after seconds: \`${retry_after_sec}\`"
             echo "- Progress hint: \`${progress_hint}\`"
             echo "- Progress signal: \`${progress_signal}\`"
             echo "- Runtime request: tier=\`${runtime_tier}\`, targetSec=\`${target_runtime_sec}\`"
             echo "- Runtime applied: tier=\`${runtime_tier_reported}\`, budgetSec=\`${runtime_budget_sec}\`, usedMs=\`${runtime_used_ms}\`"
+            echo "- Runtime padding disabled: \`${disable_padding}\`"
             echo "- Runtime wall-clock: elapsedBeforePadSec=\`${elapsed_before_pad_sec}\`, paddingSec=\`${padding_sec}\`, elapsedTotalSec=\`${elapsed_total_sec}\`"
             echo "- Chain depth: \`${chain_depth}\` (max \`${max_chain_depth}\`)"
             echo "- Chain origin: \`${chain_origin}\`"
             echo "- Chain decision: \`${should_chain}\`"
+            echo "- Decision code: \`${decision_code}\`"
             echo "- Decision reason: ${decision_reason}"
           } >> "${GITHUB_STEP_SUMMARY}"
 
