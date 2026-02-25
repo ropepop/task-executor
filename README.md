@@ -21,6 +21,10 @@ This repository contains GitHub Actions workflows that trigger scheduled mainten
 - Processes up to 200 operations per run
 - Scans up to 5000 operations within a 20-second time budget
 - Returns before/after snapshots of the queue state
+- Computes `after` backlog (`pending + dispatched`) and `processedEstimate` from drain response
+- Guardedly self-dispatches a follow-up drain worker when backlog remains and progress was made
+- Stops self-dispatch when backlog is empty, no progress is made, or chain depth reaches 6
+- Uses workflow concurrency locking so overlapping drain workers on the same ref do not run in parallel
 
 ### 2. Cache Refresh
 
@@ -69,6 +73,12 @@ Both workflows support manual triggering for testing:
 3. Click **Run workflow**
 4. Choose the branch (if applicable)
 5. Click **Run workflow**
+
+For **Operation Queue Drain**, optional manual `workflow_dispatch` inputs are available:
+- `chain_depth` (default: `0`)
+- `chain_origin` (default: `manual`)
+
+These inputs are primarily for continuity testing/debugging; normal manual runs can use defaults.
 
 ## Security
 

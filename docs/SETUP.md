@@ -56,6 +56,9 @@ Set the environment variable according to your platform's documentation.
 1. Go to **Actions** tab
 2. Select **Operation Queue Drain** workflow
 3. Click **Run workflow**
+   - Optional inputs:
+     - `chain_depth` (default `0`)
+     - `chain_origin` (default `manual`)
 4. Wait for execution to complete
 5. Check logs for success/failure
 
@@ -90,6 +93,21 @@ Use [crontab.guru](https://crontab.guru) to validate cron expressions.
 2. **Set up notifications**: Configure GitHub notifications for failed workflows
 3. **Monitor endpoint logs**: Check your deployment logs for cron endpoint activity
 4. **Track execution times**: Ensure workflows complete within timeout limits
+5. **Watch drain step summaries**: Confirm backlog/processed metrics and chaining decisions match expectations
+
+### Operation Queue Drain Backlog Chaining
+
+The drain workflow can queue a follow-up worker (`workflow_dispatch`) to improve continuity when backlog exists.
+
+Guard conditions:
+- Chain only if `after.pendingCount + after.dispatchedCount > 0`
+- Chain only if `processedEstimate > 0`
+- Chain only if current `chain_depth < 6`
+
+Additional behavior:
+- Follow-up runs use `chain_origin=auto-backlog` and increment `chain_depth`
+- If chaining was required by guard conditions but workflow self-dispatch fails (non-2xx), the job fails
+- No extra repository secrets are required; chaining uses the workflow `GITHUB_TOKEN`
 
 ## Troubleshooting
 
@@ -164,7 +182,7 @@ If you encounter rate limits:
 
 ### Concurrent Execution
 
-GitHub Actions may run multiple scheduled jobs concurrently. Ensure your endpoints handle concurrent requests safely.
+The drain workflow is configured with a concurrency group per ref, so overlapping drain workers on the same ref do not run in parallel. Cache refresh may still run independently.
 
 ## Security Checklist
 

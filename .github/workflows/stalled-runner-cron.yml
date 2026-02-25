@@ -4,9 +4,23 @@ on:
   schedule:
     - cron: '2-59/5 * * * *'
   workflow_dispatch:
+    inputs:
+      chain_depth:
+        description: Current backlog chain depth (0 for manual/scheduled runs)
+        required: false
+        default: '0'
+      chain_origin:
+        description: Origin marker for run continuity telemetry
+        required: false
+        default: manual
 
 permissions:
+  actions: write
   contents: read
+
+concurrency:
+  group: operation-queue-drain-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   drain:
@@ -32,6 +46,9 @@ jobs:
         env:
           STALLED_RUNNER_BASE_URL: ${{ secrets.STALLED_RUNNER_BASE_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          GITHUB_TOKEN: ${{ github.token }}
+          CHAIN_DEPTH_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.chain_depth || '0' }}
+          CHAIN_ORIGIN_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.chain_origin || github.event_name }}
         run: |
           set -euo pipefail
 
@@ -59,3 +76,105 @@ jobs:
             echo "Operation queue drain failed"
             exit 1
           fi
+
+          before_pending="$(jq -r '(.data.before.pendingCount // .before.pendingCount // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
+          before_dispatched="$(jq -r '(.data.before.dispatchedCount // .before.dispatchedCount // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
+          after_pending="$(jq -r '(.data.after.pendingCount // .after.pendingCount // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
+          after_dispatched="$(jq -r '(.data.after.dispatchedCount // .after.dispatchedCount // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
+          processed_estimate="$(jq -r '(.data.processedEstimate // .processedEstimate // 0) | tonumber? // 0' "${response_file}" 2>/dev/null || echo 0)"
+
+          before_backlog=$((before_pending + before_dispatched))
+          after_backlog=$((after_pending + after_dispatched))
+
+          chain_depth_raw="${CHAIN_DEPTH_INPUT:-0}"
+          if [[ "${chain_depth_raw}" =~ ^[0-9]+$ ]]; then
+            chain_depth="${chain_depth_raw}"
+          else
+            chain_depth=0
+          fi
+
+          chain_origin="${CHAIN_ORIGIN_INPUT:-manual}"
+          max_chain_depth=6
+          should_chain=false
+          decision_reason=""
+
+          if [ "${after_backlog}" -le 0 ]; then
+            decision_reason="No backlog remains after drain"
+          elif [ "${processed_estimate}" -le 0 ]; then
+            decision_reason="No progress in this run (processedEstimate <= 0)"
+          elif [ "${chain_depth}" -ge "${max_chain_depth}" ]; then
+            decision_reason="Maximum chain depth reached (${chain_depth}/${max_chain_depth})"
+          else
+            should_chain=true
+            decision_reason="Backlog remains and progress made"
+          fi
+
+          echo "Backlog before: ${before_backlog} (pending=${before_pending}, dispatched=${before_dispatched})"
+          echo "Backlog after: ${after_backlog} (pending=${after_pending}, dispatched=${after_dispatched})"
+          echo "Processed estimate: ${processed_estimate}"
+          echo "Chain context: depth=${chain_depth}, origin=${chain_origin}"
+          echo "Chain decision: ${should_chain} (${decision_reason})"
+
+          {
+            echo "### Operation Queue Drain Summary"
+            echo ""
+            echo "- HTTP status: \`${status_code}\`"
+            echo "- Backlog before: \`${before_backlog}\` (pending=\`${before_pending}\`, dispatched=\`${before_dispatched}\`)"
+            echo "- Backlog after: \`${after_backlog}\` (pending=\`${after_pending}\`, dispatched=\`${after_dispatched}\`)"
+            echo "- Processed estimate: \`${processed_estimate}\`"
+            echo "- Chain depth: \`${chain_depth}\` (max \`${max_chain_depth}\`)"
+            echo "- Chain origin: \`${chain_origin}\`"
+            echo "- Chain decision: \`${should_chain}\`"
+            echo "- Decision reason: ${decision_reason}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          if [ "${should_chain}" != "true" ]; then
+            exit 0
+          fi
+
+          next_chain_depth=$((chain_depth + 1))
+          dispatch_url="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/stalled-runner-cron.yml/dispatches"
+          dispatch_response_file="$(mktemp)"
+          dispatch_payload="$(
+            jq -n \
+              --arg ref "${GITHUB_REF_NAME}" \
+              --arg chain_depth "${next_chain_depth}" \
+              --arg chain_origin "auto-backlog" \
+              '{ref:$ref, inputs:{chain_depth:$chain_depth, chain_origin:$chain_origin}}'
+          )"
+
+          dispatch_status="$(
+            curl \
+              --silent \
+              --show-error \
+              --connect-timeout 10 \
+              --max-time 30 \
+              --output "${dispatch_response_file}" \
+              --write-out '%{http_code}' \
+              --request POST \
+              --header "Accept: application/vnd.github+json" \
+              --header "Authorization: Bearer ${GITHUB_TOKEN}" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              --header "Content-Type: application/json" \
+              --data "${dispatch_payload}" \
+              "${dispatch_url}"
+          )"
+
+          echo "Self-dispatch status: ${dispatch_status}"
+          if [ -s "${dispatch_response_file}" ]; then
+            cat "${dispatch_response_file}"
+          fi
+
+          if [ "${dispatch_status}" -lt 200 ] || [ "${dispatch_status}" -ge 300 ]; then
+            {
+              echo "- Self-dispatch status: \`${dispatch_status}\`"
+              echo "- Self-dispatch result: failed"
+            } >> "${GITHUB_STEP_SUMMARY}"
+            echo "Self-dispatch failed"
+            exit 1
+          fi
+
+          {
+            echo "- Self-dispatch status: \`${dispatch_status}\`"
+            echo "- Self-dispatch result: queued next worker with \`chain_depth=${next_chain_depth}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
