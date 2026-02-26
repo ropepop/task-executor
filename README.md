@@ -90,12 +90,16 @@ For **Operation Queue Drain**, optional manual `workflow_dispatch` inputs are av
 - `max_request_timeout_sec` (default: `1800`)
 - `max_iterations` (default: `60`)
 - `min_iterations_before_chain` (legacy compatibility input; default: `2`)
+- `max_chain_depth` (default: `500`, hard-capped to `1000`)
+- `max_dispatch_depth` (default: `3`, must be `<= max_chain_depth`)
 - `backoff_base_sec` (default: `2`)
 - `backoff_cap_sec` (default: `300`)
 - `backoff_max_retries` (default: `7`)
 - `backoff_jitter_pct` (default: `25`)
 
 These inputs are primarily for continuity testing/debugging; normal manual runs can use defaults.
+
+For deep chain experiments, use the manual workflow **Operation Queue Drain Nested Playground** (`.github/workflows/stalled-runner-nested-playground.yml`), which defaults to `max_chain_depth=1000` and `max_dispatch_depth=999`.
 
 ## Security
 

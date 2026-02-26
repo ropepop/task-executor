@@ -312,6 +312,8 @@ main() {
   local max_request_timeout_sec="$(safe_int "${MAX_REQUEST_TIMEOUT_SEC_INPUT:-1800}")"
   local max_iterations="$(safe_int "${MAX_ITERATIONS_INPUT:-60}")"
   local min_iterations_before_chain="$(safe_int "${MIN_ITERATIONS_BEFORE_CHAIN_INPUT:-2}")"
+  local max_chain_depth="$(safe_int "${MAX_CHAIN_DEPTH_INPUT:-500}")"
+  local max_dispatch_depth="$(safe_int "${MAX_DISPATCH_DEPTH_INPUT:-3}")"
 
   local backoff_base_sec="$(safe_int "${BACKOFF_BASE_SEC_INPUT:-2}")"
   local backoff_cap_sec="$(safe_int "${BACKOFF_CAP_SEC_INPUT:-300}")"
@@ -322,9 +324,6 @@ main() {
   local min_request_timeout_sec=120
   local target_request_timeout_sec=900
   local dispatch_buffer_sec=90
-  local max_chain_depth=500
-  local max_dispatch_depth=3
-
   if [ "${run_budget_sec}" -lt 600 ]; then
     run_budget_sec=600
   fi
@@ -336,6 +335,18 @@ main() {
   fi
   if [ "${min_iterations_before_chain}" -lt 1 ]; then
     min_iterations_before_chain=1
+  fi
+  if [ "${max_chain_depth}" -lt 1 ]; then
+    max_chain_depth=1
+  fi
+  if [ "${max_chain_depth}" -gt 1000 ]; then
+    max_chain_depth=1000
+  fi
+  if [ "${max_dispatch_depth}" -lt 0 ]; then
+    max_dispatch_depth=0
+  fi
+  if [ "${max_dispatch_depth}" -gt "${max_chain_depth}" ]; then
+    max_dispatch_depth="${max_chain_depth}"
   fi
 
   if [ "${backoff_base_sec}" -lt 1 ]; then
@@ -602,7 +613,7 @@ main() {
       decision_reason="Backlog remains but maximum chain depth reached (${chain_depth}/${max_chain_depth})"
     elif [ "${chain_depth}" -ge "${max_dispatch_depth}" ]; then
       decision_code="dispatch_depth_cap_reached"
-      decision_reason="Backlog remains but generation cap reached (gen4 terminal, no gen5 spawn)"
+      decision_reason="Backlog remains but dispatch depth cap reached (${chain_depth}/${max_dispatch_depth})"
     fi
   fi
 
@@ -637,7 +648,7 @@ main() {
   echo "Current generation: ${current_generation}"
   echo "Spawn due backlog: ${spawn_due_backlog}"
   echo "Next generation: ${next_generation}"
-  echo "Chain dispatch depth cap: ${max_dispatch_depth} (gen1->gen2->gen3->gen4)"
+  echo "Chain dispatch depth cap: ${max_dispatch_depth}"
   echo "Chain control input (legacy): minIterationsBeforeChain=${min_iterations_before_chain}"
   echo "Decision code: ${decision_code}"
   echo "Decision reason: ${decision_reason}"
@@ -664,7 +675,7 @@ main() {
   emit_summary "- Current generation: \`${current_generation}\`"
   emit_summary "- Spawn due backlog: \`${spawn_due_backlog}\`"
   emit_summary "- Next generation: \`${next_generation}\`"
-  emit_summary "- Chain dispatch depth cap: \`${max_dispatch_depth}\` (gen4 is terminal)"
+  emit_summary "- Chain dispatch depth cap: \`${max_dispatch_depth}\`"
   emit_summary "- Chain control input (legacy): minIterationsBeforeChain=\`${min_iterations_before_chain}\`"
   emit_summary "- Decision code: \`${decision_code}\`"
   emit_summary "- Decision reason: ${decision_reason}"
@@ -694,6 +705,8 @@ main() {
       --arg max_request_timeout_sec "${max_request_timeout_sec}" \
       --arg max_iterations "${max_iterations}" \
       --arg min_iterations_before_chain "${min_iterations_before_chain}" \
+      --arg max_chain_depth "${max_chain_depth}" \
+      --arg max_dispatch_depth "${max_dispatch_depth}" \
       --arg backoff_base_sec "${backoff_base_sec}" \
       --arg backoff_cap_sec "${backoff_cap_sec}" \
       --arg backoff_max_retries "${backoff_max_retries}" \
@@ -707,6 +720,8 @@ main() {
           max_request_timeout_sec:$max_request_timeout_sec,
           max_iterations:$max_iterations,
           min_iterations_before_chain:$min_iterations_before_chain,
+          max_chain_depth:$max_chain_depth,
+          max_dispatch_depth:$max_dispatch_depth,
           backoff_base_sec:$backoff_base_sec,
           backoff_cap_sec:$backoff_cap_sec,
           backoff_max_retries:$backoff_max_retries,
