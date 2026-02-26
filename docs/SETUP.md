@@ -106,13 +106,14 @@ Use [crontab.guru](https://crontab.guru) to validate cron expressions.
 
 ### Operation Queue Drain Backlog Chaining
 
-The drain workflow runs a strict single-item loop and can queue a follow-up worker (`workflow_dispatch`) when backlog remains and the current generation is not terminal.
+The drain workflow runs a strict single-item loop and can queue a follow-up worker (`workflow_dispatch`) when backlog remains and run budget is exhausted after a successful item transition.
 
 Guard conditions:
 - Chain only if `after.pendingCount + after.dispatchedCount > 0`
-- Chain only if current `chain_depth < 3` (dispatch cap)
+- Chain only if last transition succeeded (`succeededCount == 1`)
+- Chain only if current `chain_depth < 500`
 - Max one self-dispatch per run
-- Chain dispatch depth cap is `3`, mapping to:
+- Chain dispatch depth cap is typically `3`, mapping to:
   - `0=gen1`
   - `1=gen2`
   - `2=gen3`
