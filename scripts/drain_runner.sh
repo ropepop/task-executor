@@ -301,6 +301,7 @@ main() {
   : "${GITHUB_REF_NAME:?Missing GITHUB_REF_NAME}"
   : "${GITHUB_RUN_ID:?Missing GITHUB_RUN_ID}"
   : "${GITHUB_EVENT_NAME:?Missing GITHUB_EVENT_NAME}"
+  export PIXEL_RUN_ID="${PIXEL_RUN_ID:-${GITHUB_RUN_ID}}"
 
   local chain_depth="$(safe_int "${CHAIN_DEPTH_INPUT:-0}")"
   local chain_origin_input="${CHAIN_ORIGIN_INPUT:-}"
@@ -449,12 +450,14 @@ main() {
     cat "${response_file}"
 
     if [ "${status_code}" -lt 200 ] || [ "${status_code}" -ge 300 ]; then
+      rm -f "${response_file}" >/dev/null 2>&1 || true
       echo "Operation queue drain failed"
       exit 1
     fi
 
     local metrics_line
     metrics_line="$(extract_iteration_metrics "${response_file}")"
+    rm -f "${response_file}" >/dev/null 2>&1 || true
 
     local before_pending before_dispatched after_pending after_dispatched
     local attempted_count succeeded_count rate_limited_count rate_limit_only retry_after_sec
@@ -753,12 +756,14 @@ main() {
   fi
 
   if [ "${dispatch_status}" -lt 200 ] || [ "${dispatch_status}" -ge 300 ]; then
+    rm -f "${dispatch_response_file}" >/dev/null 2>&1 || true
     emit_summary "- Self-dispatch status: \`${dispatch_status}\`"
     emit_summary "- Self-dispatch result: failed"
     echo "Self-dispatch failed"
     exit 1
   fi
 
+  rm -f "${dispatch_response_file}" >/dev/null 2>&1 || true
   emit_summary "- Self-dispatch status: \`${dispatch_status}\`"
   emit_summary "- Self-dispatch result: queued next worker with \`chain_depth=${next_chain_depth}\`, \`chain_origin=${next_chain_origin}\`"
   return "${exit_code}"
