@@ -196,3 +196,13 @@ For issues or questions, please refer to the private App repository documentatio
 
 Private endpoint follow-up spec for strict single-item execution:
 - [`docs/LINKS-STRICT-DRAIN-FOLLOWUP.md`](docs/LINKS-STRICT-DRAIN-FOLLOWUP.md)
+
+<!-- github-manager-readme:start -->
+## Public Copy Notes
+
+This repository is refreshed by GitHub Manager from a sanitized staging copy.
+Files that look private, generated, or unsafe for public release are left out before each update.
+
+- Risky files removed in the latest sanitation pass: 4
+- Top-level items in this public copy: `.github/`, `docs/`, `scripts/`, `.gitignore`, `IMPLEMENTATION_SUMMARY.md`, `LICENSE`, `module.yaml`
+<!-- github-manager-readme:end -->
